@@ -2,3 +2,5 @@
 .claude
 .cursor
 .idea/
+backend/.env
+frontend/.env.local
