@@ -1,6 +1,21 @@
+# General
+.idea/
 .agents
 .claude
 .cursor
-.idea/
+*.log
+
+# Backend
+backend/.venv/
+backend/__pycache__/
+backend/.pytest_cache/
 backend/.env
+backend/app/builders/temp/
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
 frontend/.env.local
+
+# Supabase
+supabase/.temp/

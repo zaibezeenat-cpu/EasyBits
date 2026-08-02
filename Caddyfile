@@ -1,0 +1,23 @@
+# Set DOMAIN in backend/.env to your real domain (e.g. DOMAIN=panel.kiachahiye.com)
+# and Caddy will obtain and renew a Let's Encrypt TLS certificate automatically.
+# With DOMAIN unset it falls back to localhost for local testing.
+{$DOMAIN:localhost} {
+	# /api/* goes to the backend WITH the prefix intact -- the FastAPI routes are
+	# mounted under /api (e.g. /api/products), so the prefix must NOT be stripped.
+	# (The old `handle_path` stripped it and every API call 404'd.)
+	@api path /api/*
+	reverse_proxy @api backend:8000
+
+	# Everything else is the Next.js app.
+	reverse_proxy frontend:3000
+
+	encode gzip
+
+	# Caddy adds HSTS itself under HTTPS; these harden the proxied responses.
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

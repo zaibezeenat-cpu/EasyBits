@@ -1,0 +1,54 @@
+[project]
+name = "kiachahye-pipeline-backend"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "supabase>=2.9",
+    "langgraph>=0.2",
+    "langgraph-checkpoint-postgres>=2.0",
+    "langchain-core>=0.3",
+    "langchain-google-genai>=2.0",
+    "langchain-groq>=0.2",
+    "langchain-openai>=0.2",
+    "playwright>=1.48",
+    # Tier 1 scrape: real Chrome TLS/JA3 impersonation (defeats passive anti-bot,
+    # ~10x faster than a browser). Tier 2 stealth hides headless Playwright's
+    # navigator/webdriver fingerprint for JS-rendered pages. Both optional at
+    # runtime -- app/scraping/fetcher.py imports them lazily and falls back to
+    # plain Playwright if either is absent.
+    "curl_cffi>=0.7",
+    "tf-playwright-stealth>=1.1",
+    "firecrawl-py>=1.6",
+    "beautifulsoup4>=4.12",
+    "pyjwt>=2.9",
+    "passlib[bcrypt]>=1.7",
+    "slowapi>=0.1.9",
+    "sentry-sdk[fastapi]>=2.17",
+    "python-multipart>=0.0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "respx>=0.21",
+    "ruff>=0.7",
+]
+
+[tool.pytest.ini_options]
+# These are DeprecationWarnings from third-party libraries (google-genai,
+# starlette/fastapi TestClient, slowapi, supabase), not from our code -- verified
+# by their site-packages source locations. They are silenced specifically (never a
+# blanket ignore) so the suite runs clean and any FUTURE warning raised by OUR
+# code stands out immediately. Revisit when these libraries ship fixes for 3.12+.
+filterwarnings = [
+    "ignore:.*_UnionGenericAlias.*:DeprecationWarning",
+    "ignore:.*httpx.*starlette\\.testclient.*",
+    "ignore:.*asyncio\\.iscoroutinefunction.*:DeprecationWarning",
+    "ignore:The 'timeout' parameter is deprecated.*:DeprecationWarning",
+    "ignore:The 'verify' parameter is deprecated.*:DeprecationWarning",
+]

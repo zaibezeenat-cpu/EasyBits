@@ -1,0 +1,2 @@
+# Keeps this directory present after a fresh git clone so the frontend
+# Dockerfile's `COPY --from=builder /app/public ./public` never fails.

@@ -1,9 +1,41 @@
-# Phase 2: Implementation Plan (Revised v2.0)
+# Phase 2: Implementation Plan (Revised v2.6 - Production Lock)
 
-**Status:** Planning document only — no code has been written yet.
-**Builds on:** `phase1.md` (v7.0, locked) + the Phase 2 v1.0 cross-check report (18 findings, 0 critical / 5 high / 6 medium / 7 low, verdict CONDITIONALLY READY).
-**This revision:** closes every finding from that report. Every fix below is traceable to a specific finding number from the cross-check.
-**Repo state:** greenfield. `d:\EasyBits` contains only `phase1.md` and this file — nothing scaffolded.
+**Status:** Locked Specification — matches the actual implemented code exactly.
+**Builds on:** `phase1.md` (v8.0/v3.1-corrected, locked) + Phase 2 v2.5.
+**Repo state:** implemented — see git status for the real file tree; this document is the spec the code is built against.
+
+**Changelog v2.5 → v2.6 (Thin-Content Guard — new addition, not a correction of a prior mistake; found during a code-level SEO audit against e-commerce best practice, not from real reference data this time):**
+- Added a 13th deterministic SEO check, `content_length_minimum`, to `seo_validator.py::validate_seo_rules()`: concatenated body copy (hero paragraph + all feature texts + bullets + FAQ answers) must be ≥ 200 words. Nothing previously enforced a floor on content length — a response could pass every existing check (correct meta length, correct keyword placement, correct alt text) while still being thin, generic copy that ranks poorly regardless of clean metadata.
+- `writer.py::WRITER_SYSTEM_PROMPT` updated with a new rule 7 (content depth) plus explicit per-field minimums (hero_paragraph ≥ 40 words, each feature_text ≥ 25 words) so the LLM is aiming comfortably above the floor rather than exactly at it.
+- `ReviewResult.checks` docstring updated from "all 11 checks" to "all 13 checks."
+- Wired automatically into the existing pass/fail gate (`all(c.passed for c in seo_checks)` in `nodes.py`) — no change needed there.
+
+**Changelog v2.4 → v2.5 (V3.0 correction — supersedes v2.4's Focus Keyword and warranty-mention entries below, not layered alongside them; confirmed against real Rank Math plugin screenshots from the live site, not a guess):**
+- **Focus Keyword field reversal:** v2.4's "exactly one keyword, locked to the exact Product Name, no comma-stacking" was correct for the *internal/primary* keyword used by validator checks (still true — see `focus_keyword_single_exact_match` in `seo_validator.py`), but wrong about the *exported CSV field*. The live Rank Math panel's Focus Keyword UI natively supports a primary keyword plus secondary/related keyword pills, and its scoring is computed against "Focus Keyword and combination." The CSV's `Meta: rank_math_focus_keyword` column is now built by `seo_title_builder.py::build_focus_keyword_field(primary_keyword, secondary_keywords)`, which comma-joins the deterministic primary keyword with the Writer's 3 LSI keywords — matching real reference CSV exports (e.g. the Kenwood/Midea AC examples) that show 4 comma-separated keywords in this field. See §3.2, §8.7.
+- **Meta description warranty-mention check relaxed:** v2.4 required the exact stored warranty phrase to appear verbatim in the meta description. In practice this is nearly impossible once the Boss Title Rule produces long (80+ char) focus keywords, since the 151–155 char budget has no room left for a full compound warranty sentence too — and real reference examples abbreviate the warranty wording rather than repeating it exactly. `seo_validator.py`'s check #7 (`meta_description_mentions_warranty`) now extracts every duration number from the real warranty phrase (`re.findall(r"\d+", ...)`) and requires each number to appear in the description, without requiring the exact sentence wording — numbers can never be silently dropped or invented, but phrasing can be compact.
+
+**Changelog v2.3 → v2.4 (V8.0 Production Lock — supersedes v2.3's SEO title entry below, not layered alongside it):**
+- **This is the correction:** v2.3's "Corrected the Rank Math title suffix to '[Product Name] - Best Price in Pakistan | kiachahye.pk'" was itself wrong and is now fully replaced. The title is deterministic and category-aware (the "Boss Title Rule" for Air Conditioners, a power-word fallback elsewhere) — see §3.2, §5.2, `backend/app/builders/seo_title_builder.py`.
+- Focus Keyword is now exactly one keyword, locked to the exact Product Name — the old 10–13 comma-separated stacking rule is removed, not layered as an alternate.
+- Meta description is now strictly 151–155 characters, must begin with the Focus Keyword, mention the exact warranty phrase, and end with a fixed, capacity-aware CTA — resolved once (`writer_node`) and reused identically by the validator, so the two can never independently drift onto different claims (this was a real bug found and fixed during review — see `seo_validator.py`'s `expected_meta_cta()`).
+- Added the LSI Keyword rule: exactly 3, must appear as plain text in the body — `html_sanitizer.py::strip_lsi_keyword_formatting()` strips any `<strong>`/`<b>`/heading wrapper found immediately around one of these exact strings.
+- Added the hardcoded "Zig-Zag" image grid template for Template A (`description_merger.py::render_template_a_zigzag()`) — alternating row direction, `src=""` always (images stay manual for V1, phase1.md §8.5).
+- Added the Brand Casing Lock and Category Breadcrumb Assertion as hard errors in `csv_assembler.py` (`BrandCasingMismatchError`, `CategoryBreadcrumbError`), and newline-stripping before CSV writing (`strip_newlines_for_csv()`).
+
+**Changelog v2.2 → v2.3 (SEO Remediation):**
+- Updated `seo_validator.py` with all required SEO checks from phase1.md §6.8.
+- Corrected `short_description_renderer.py` to use the paragraph template from §7.2.
+- Updated `specs_renderer.py` with the thead structure and inline styling from §7.7.
+- Formalized the 4-location warranty consistency check in `reviewer_node` (§5.5).
+- Populated missing `short_description` and `description` fields in `nodes.py` by integrating builder calls into the pipeline.
+
+**Changelog v2.1 → v2.2:**
+- Added `backend/app/core/budget_guard.py` to the manifest (§1).
+- Added explicit logic for `name_builder.py` (44-char limit + abbreviations) and `tag_generator.py` (3-tag rule) (§6).
+- Defined the exact 49-column `COLUMN_ORDER` for the CSV engine (§6).
+- Added RLS policy SQL blueprints for the database schema (§2).
+- Formalized `budget_guard.py` logic (§7) and confirmed sequential batch orchestration (§9).
+- Set `[Product Name] | Best Price` as the default SEO title format (§5.2).
 
 **Changelog v2.0 → v2.1:** Replaced the mandatory per-brand `brand_source_urls` table with dynamic source discovery — Agent 1 web-searches per product and domain-matches results instead of requiring a pre-registered URL per brand. Introduces `trusted_secondary_sources` (a small, Settings-editable list — Japan Electronics/Surmawala seeded by default, not hardcoded) and an optional `brand_domain_aliases` table for the rare brand whose official domain doesn't match its name well enough for automatic detection. See §2, §4, §5.2.
 
@@ -66,6 +98,7 @@ backend/
       logging.py
       llm_provider.py                 # + explicit backoff config, closes #13
       rate_limit.py                   # NEW — slowapi wrapper for /api/auth/login, closes #18
+      budget_guard.py                 # NEW — hard cost cap enforcement, §7
     db/
       client.py
       repositories/
@@ -469,6 +502,23 @@ Seeded with 2 rows (Japan Electronics, Surmawala) — add/remove/deactivate via 
 
 Migration files: `0001_init_schema.sql` … `0005_products_content_columns.sql` … `0006_dynamic_source_discovery.sql` (drops `brand_source_urls`, adds `trusted_secondary_sources` + `brand_domain_aliases`, alters `source_citations.source_type` and `manual_review_queue.reason_code` check constraints).
 
+### RLS Policy Blueprint (Service-Role Only)
+
+Every table must have RLS enabled. Since this is a single-user system where the backend (FastAPI) uses the `service_role` key to bypass RLS, the policies should be "locked" by default.
+
+```sql
+-- Example for all tables
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+-- No permissive policies added -> only service_role/admin can access.
+```
+
+### Seed Data: `app_settings`
+- `trust_level`: `"full_review"`
+- `monthly_api_budget_usd`: `5.00`
+- `live_sku_last_synced_at`: `null`
+
+**v8.0 note:** `rank_math_title_format` is removed from `app_settings` — the SEO title is no longer a user-editable string template. It's fully deterministic via `seo_title_builder.py`'s `CATEGORY_TITLE_DESCRIPTORS` dict (edit that dict, not a Settings field, to add a new category's literal title descriptor).
+
 ---
 
 ## 3. Agent Pipeline (LangGraph)
@@ -562,7 +612,7 @@ class ExtractionResult(BaseModel):
         return [f.key for f in schema.fields if self.has_conflict(f.key)]
 ```
 
-`backend/app/models/writer_output.py`:
+`backend/app/models/writer_output.py` (v8.0 Production Lock):
 ```python
 from pydantic import BaseModel, field_validator
 
@@ -580,9 +630,21 @@ class WriterOutput(BaseModel):
     short_desc_feature_1: str
     short_desc_feature_2: str
     short_desc_feature_3: str
-    rank_math_focus_keyword: str        # 10-13 comma-separated keywords, validated in seo_validator
-    rank_math_title: str
-    rank_math_description: str          # <=155 chars, ends "!"
+
+    # --- v8.0 Production Lock SEO fields ---
+    # rank_math_focus_keyword is NO LONGER written by the LLM — locked deterministically
+    # to the exact Product Name by the pipeline (nodes.py). rank_math_title is NO LONGER
+    # written by the LLM — built deterministically by seo_title_builder.py ("Boss Title Rule").
+    rank_math_description: str          # strictly 151-155 chars; begins with focus keyword;
+                                         # mentions warranty; ends with fixed CTA (seo_validator.py)
+    lsi_keywords: list[str]             # exactly 3 — must appear as PLAIN TEXT (no bold/header
+                                         # wrapper) somewhere in the body copy. v3.0: these 3 keywords
+                                         # are also reused downstream (unchanged from the LLM's view)
+                                         # as the Rank Math secondary keywords in the exported CSV's
+                                         # Meta: rank_math_focus_keyword field — see build_focus_keyword_field(), §3.2, §8.7.
+    alt_text_1: str                     # Template A image 1 alt text — focus keyword or an LSI keyword
+    alt_text_2: str
+    alt_text_3: str
 
     @field_validator("faqs")
     @classmethod
@@ -591,6 +653,15 @@ class WriterOutput(BaseModel):
             raise ValueError(f"WriterOutput.faqs must have exactly 5 entries, got {len(v)}")
         if v[4].question != "What is the official warranty?":
             raise ValueError("faqs[4].question must be the fixed warranty question, phase1.md §6.4")
+
+    @field_validator("lsi_keywords")
+    @classmethod
+    def exactly_three_lsi_keywords(cls, v: list[str]) -> list[str]:
+        if len(v) != 3:
+            raise ValueError(f"WriterOutput.lsi_keywords must have exactly 3 entries, got {len(v)} (v8.0 Production Lock)")
+        if any(not k.strip() for k in v):
+            raise ValueError("WriterOutput.lsi_keywords entries must not be empty")
+        return v
         return v
 ```
 
@@ -751,7 +822,7 @@ mentioned anywhere in any source:
 Now perform the extraction for the product and sources given above. Output ONLY the JSON object.
 ```
 
-#### Agent 2 — Writer (`backend/app/agents/writer.py::WRITER_SYSTEM_PROMPT`)
+#### Agent 2 — Writer (`backend/app/agents/writer.py::WRITER_SYSTEM_PROMPT`) — v8.0 Production Lock
 
 ```
 You are an e-commerce copywriter for a Pakistani home-appliance store. You write persuasive,
@@ -770,17 +841,41 @@ Brand: {brand_name} | Category: {category_name} | Name: {product_name}
 Warranty (use this exact phrase wherever warranty is mentioned): {warranty_phrase}
 Template: {template_type}   <!-- "A" = 3 image/feature blocks, "B" = 1 text section -->
 
-## SEO Rules (phase1.md §6, v7.0 — natural language, not mechanical stuffing)
-1. Primary keyword: "{primary_keyword}". Use it naturally 3-6 times across all your text
-   combined, varying phrasing/synonyms across repeats — do NOT repeat the identical phrase
-   verbatim more than twice in a row. This is a HARD CONSTRAINT: forced exact repetition
-   reads as keyword-stuffed and will be rejected by the Reviewer.
-2. rank_math_focus_keyword: exactly 10 to 13 comma-separated keywords/keyphrases, the
-   primary keyword first.
-3. rank_math_title: format "{title_format_template}" (fill {{name}} with the exact product
-   name given above). Target 55-60 characters.
-4. rank_math_description: under 155 characters, ends with an exclamation-mark CTA.
-5. Mention the primary keyword within the first 10% of hero_paragraph.
+## SEO Rules — v8.0 Production Lock (100/100 Rank Math guarantee, zero tolerance)
+
+1. Focus Keyword: "{focus_keyword}" — this is LOCKED to the exact Product Name and is
+   NOT something you write; it is applied deterministically outside this prompt. Use it
+   naturally within the first 10% of hero_paragraph and 3-6 times across all text combined
+   (vary phrasing on later repeats — do not repeat the identical phrase verbatim more than
+   twice in a row).
+
+2. rank_math_title: also NOT written by you — built deterministically outside this prompt
+   (the "Boss Title Rule" / power-word format). Do not include it in your output.
+
+3. rank_math_description: a single string, EXACTLY 151 to 155 characters (count characters,
+   not words). It MUST:
+   - begin with the exact focus keyword "{focus_keyword}"
+   - explicitly mention the warranty ("{warranty_phrase}")
+   - end with exactly this sentence, verbatim, no variation: "{meta_description_cta}"
+   Compose the middle so the whole string lands in the 151-155 character window — pad or
+   trim connective phrasing as needed. This is a HARD CONSTRAINT; a description outside
+   151-155 chars, missing the warranty mention, not starting with the focus keyword, or not
+   ending with the exact CTA sentence will be rejected by the Reviewer.
+
+4. lsi_keywords: generate EXACTLY 3 LSI (semantically related) keywords for this product.
+   Each one MUST be woven natively into your hero_paragraph or feature_texts as plain
+   sentence text — never inside a bolded phrase, a heading, or otherwise emphasized markup.
+   You are producing plain strings in JSON, so this mainly means: don't phrase an LSI
+   keyword as if it were a heading/title fragment, write it as ordinary prose. It must
+   appear verbatim (case-insensitive) somewhere in your body copy or the Reviewer will
+   reject the output.
+
+5. alt_text_1 / alt_text_2 / alt_text_3: for Template A's three product images, each alt
+   text MUST be exactly the focus keyword "{focus_keyword}" or exactly one of your three
+   lsi_keywords — nothing else, no extra words. For Template B, still supply plausible
+   values for alt_text_1/2/3 (they may be unused by the renderer, but the field is
+   required) using the same rule.
+
 6. faqs: exactly 5 question/answer pairs. Questions 1-4 are about real product features
    from the Ground Truth above (never about an UNKNOWN field). Question 5 MUST be exactly
    "What is the official warranty?" with answer "It comes with a {warranty_phrase} provided
@@ -791,8 +886,8 @@ Template: {template_type}   <!-- "A" = 3 image/feature blocks, "B" = 1 text sect
 - feature_headings / feature_texts: {feature_block_count} entries (3 for Template A, 2 for
   Template B), each describing one confirmed feature from Ground Truth.
 - features_bullets: 4-6 short bullet points, confirmed facts only.
-- short_desc_feature_1/2/3: three short phrases for the short description template
-  (phase1.md §7.2), confirmed facts only.
+- short_desc_feature_1/2/3: three short phrases for the short description template,
+  confirmed facts only.
 
 ## Output Schema
 Return a single JSON object matching WriterOutput exactly — no markdown, no prose outside JSON:
@@ -800,23 +895,26 @@ Return a single JSON object matching WriterOutput exactly — no markdown, no pr
   "hero_heading": "...", "hero_paragraph": "...",
   "feature_headings": ["...", ...], "feature_texts": ["...", ...],
   "features_bullets": ["...", ...],
-  "faqs": [{{"question": "...", "answer": "..."}}, ... exactly 5 ...],
+  "faqs": [{{"question": "...", "answer": "..."}}], ... exactly 5 ...],
   "short_desc_feature_1": "...", "short_desc_feature_2": "...", "short_desc_feature_3": "...",
-  "rank_math_focus_keyword": "kw1, kw2, ...",
-  "rank_math_title": "...", "rank_math_description": "..."
+  "rank_math_description": "...",
+  "lsi_keywords": ["...", "...", "..."],
+  "alt_text_1": "...", "alt_text_2": "...", "alt_text_3": "..."
 }}
 
 {reviewer_feedback_if_retry}
 <!-- On a retry, this section is populated with the specific ReviewResult failures from the
-     previous attempt, e.g. "Previous attempt failed: rank_math_description was 172 characters
-     (limit 155). Fix only that issue; keep everything else that passed." -->
+     previous attempt, e.g. "Previous attempt failed: rank_math_description was 149 characters
+     (required 151-155). Fix only that issue; keep everything else that passed." -->
 
 Output ONLY the JSON object.
 ```
 
+**Note on `rank_math_focus_keyword` and `rank_math_title`:** neither is in the Writer's output schema above — both are v8.0 deterministic fields computed by the pipeline (`build_name()` for the focus keyword, `seo_title_builder.py::build_seo_title()` for the title) before the Writer is even called, and passed *into* the prompt as `{focus_keyword}` context, never generated by the LLM. This removes an entire class of possible LLM drift on the two fields Rank Math weights most heavily. The Writer still never sees or produces the *exported* multi-keyword CSV field — that combination happens downstream, purely from data the Writer already emits (`lsi_keywords`) plus the deterministic primary keyword; see the v3.0 changelog entry above and §8.7.
+
 #### Agent 3 — Reviewer (`backend/app/agents/reviewer.py::REVIEWER_SYSTEM_PROMPT`)
 
-Used only for the semantic fact-cross-check sub-task; the 11 SEO checks and the warranty exact-match check are deterministic Python (`seo_validator.py`), not LLM calls — the Reviewer's LLM call exists solely to catch prose-level contradictions that string matching can't (e.g., the Writer implying a feature exists when the corresponding Ground Truth field was UNKNOWN).
+Used only for the semantic fact-cross-check sub-task; the 12 SEO checks (v8.0 Production Lock, `phase1.md` §6.8) and the warranty-mention check are deterministic Python (`seo_validator.py`) — the latter relaxed under v3.0 to require the warranty's duration number(s) to appear rather than the exact stored phrase (see changelog above) — not LLM calls; the Reviewer's LLM call exists solely to catch prose-level contradictions that string matching can't (e.g., the Writer implying a feature exists when the corresponding Ground Truth field was UNKNOWN).
 
 ```
 You are a strict fact-checker. Compare the WRITTEN CONTENT below against the GROUND TRUTH
@@ -977,7 +1075,7 @@ Two functional additions on top of all of the above:
 1. **Trusted Secondary Sources** (v2.1, replaces the old per-brand "Brand Source URLs" section — no longer needed since official sites are found dynamically, §4) — a simple add/remove/deactivate list over `trusted_secondary_sources` (domain + label, e.g. `japanelectronics.pk` / "Japan Electronics"), plus a small "Brand Domain Overrides" sub-table over `brand_domain_aliases` for the rare brand the automatic domain-match heuristic gets wrong.
 2. **Warranty Matrix** — CRUD table over `warranty_matrix` (brand+category → warranty phrase, `last_audited_at` shown with a "stale (>90 days)" badge to prompt the quarterly re-audit from `phase1.md` §5.5).
 3. **Trust Level** — the `app_settings.trust_level` toggle (Full Review Mode / Quick Review Mode), with a confirmation dialog since `phase1.md` §15 calls this a one-way decision.
-4. **SEO Title Format** — a dropdown locking in `app_settings.rank_math_title_format` (the one chosen format from `phase1.md` §6.2), with a live preview.
+4. **SEO Title Descriptors** (v8.0, replaces the old format dropdown) — a read/edit view over `seo_title_builder.py`'s `CATEGORY_TITLE_DESCRIPTORS` dict, so adding a new category's literal "Boss Title Rule" descriptor doesn't require a code deploy. The title itself is no longer a free-text template — it's deterministic, category-aware, and not user-editable beyond registering a category's descriptor string.
 5. **Live SKU Snapshot** — CSV file upload replacing `live_sku_snapshot` wholesale, showing `live_sku_last_synced_at`.
 6. **Monthly API Budget Limit** (v2.1) — a single dollar-amount field bound to `app_settings.monthly_api_budget_usd` (default $5), plus a small this-month-so-far total pulled from `llm_usage_log` so you can see how close you are before it ever pauses anything.
 7. **API Key Status** (read-only) — a checklist showing which of `GEMINI_API_KEY`/`GROQ_API_KEY`/`OPENAI_API_KEY`/`FIRECRAWL_API_KEY`/`GLITCHTIP_DSN` are configured (present/absent only — **the values themselves are never fetched, displayed, or editable via this UI**; they live only in the droplet's `.env`, per §1's secrets rule). This satisfies "a Settings page mentions API keys" without ever exposing a secret to a browser.
@@ -986,7 +1084,25 @@ Taxonomy Manager (unchanged from v1.0) remains the separate page for `brands`/`c
 
 ---
 
-## 6. CSV Engine
+## 6. CSV Engine & Deterministic Builders
+
+### 6.1 Column Order (Master Checklist — 49 columns)
+`COLUMN_ORDER` constant used by `csv.DictWriter` (matches `phase1.md` §8.7):
+1. `ID` (empty), 2. `Type` (`simple`), 3. `SKU`, 4. `Name`, 5. `Published` (`-1`), 6. `Is featured?` (`0`), 7. `Visibility in catalog` (`visible`), 8. `Short description`, 9. `Description`, 10. `Date sale price starts`, 11. `Date sale price ends`, 12. `Tax status` (`none`), 13. `Tax class`, 14. `In stock?` (`1`), 15. `Stock`, 16. `Low stock amount`, 17. `Backorders allowed?` (`0`), 18. `Sold individually?` (`0`), 19. `Weight (kg)`, 20. `Length (cm)`, 21. `Width (cm)`, 22. `Height (cm)`, 23. `Allow customer reviews?` (`1`), 24. `Purchase note`, 25. `Sale price`, 26. `Regular price`, 27. `Categories`, 28. `Tags`, 29. `Shipping class`, 30. `Images` (empty), 31. `Download limit` (`0`), 32. `Download expiry days` (`0`), 33. `Parent`, 34. `Grouped products`, 35. `Upsells`, 36. `Cross-sells`, 37. `External URL`, 38. `Button text`, 39. `Position` (`0`), 40. `Brands`, 41. `Meta: _woodmart_product_custom_tab_title` (`Specification`), 42. `Meta: _woodmart_product_custom_tab_priority` (`20`), 43. `Meta: _woodmart_product_custom_tab_content_type` (`text`), 44. `Meta: _woodmart_product_custom_tab_content` (Specs HTML), 45. `Meta: rank_math_focus_keyword` (v3.0: primary keyword + 3 LSI keywords, comma-joined via `build_focus_keyword_field()` — not the primary keyword alone), 46. `Meta: rank_math_title`, 47. `Meta: rank_math_description`, 48. `Meta: rank_math_seo_score` (empty), 49. `Meta: rank_math_breadcrumb_title` (Name).
+
+### 6.2 Name Builder (`name_builder.py`)
+Formula: `[Brand] [Capacity] [Model] [Type]`
+- Capacity cleaning: `1.0 Ton` -> `1 Ton`, `20 Liters` -> `20L`.
+- **44-Char Limit:** If total length > 44, abbreviate `Type`:
+    - `Air Conditioner` -> `AC`
+    - `Microwave Oven` -> `Microwave`
+    - `Washing Machine` -> `Washer`
+    - `Water Dispenser` -> `Dispenser`
+
+### 6.3 Tag Generator (`tag_generator.py`)
+Formula: `[Brand], [Category], HW` (Exactly 3 tags, comma-separated).
+
+### 6.4 Dimensions Builder (`dimensions_builder.py`) (closes #3)
 
 Unchanged core design from v1.0 (`COLUMN_ORDER` single source of truth, `csv.DictWriter` + `QUOTE_ALL`, `taxonomy_lock.py`, `sku_guard.py`, `html_sanitizer.py`). One addition:
 

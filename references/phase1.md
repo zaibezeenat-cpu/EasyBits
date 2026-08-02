@@ -2,7 +2,11 @@
 # Phase 1: Verified Master Plan (Corrected v7.0)
 
 **Project:** Enterprise-Level AI Agentic E-Commerce Workflow (LangGraph)
-**Version:** 7.1 — Dynamic Source Discovery (replaces static per-brand URL list with live web search + domain matching)
+**Version:** 8.0 — Production Lock (SEO formatting rules brought in line with the actual implemented `seo_validator.py`/`writer.py`/`html_sanitizer.py`; supersedes v7.1's §6 entirely, not layered alongside it), with v3.0/v3.1 corrections layered on top (see below and §6.1/§6.8).
+
+**Changelog v3.0 → v3.1 (Thin-Content Guard, code-level SEO audit finding, not a spec error being corrected):** Added check #13, `content_length_minimum` — concatenated body copy must be ≥ 200 words, per e-commerce SEO best practice (short, generic product copy reads as thin content to Google regardless of how clean the metadata is). Nothing previously enforced a floor on content length. `writer.py`'s prompt now also asks for a 40-word-minimum hero paragraph and 25-word-minimum per feature text. See §6.8 item 13.
+
+**Changelog v7.1 → v8.0 (Production Lock):** Replaced the 10–13 comma-separated focus-keyword rule with a single Focus Keyword locked to the exact Product Name (no stacking). Replaced the ambiguous "`| Best Price`" title format with a deterministic, category-aware title builder (the "Boss Title Rule" for Air Conditioners, a power-word fallback for every other category — no LLM drift, no missing suffix, ever). Replaced "meta description under 155 chars, ends with !" with a strict 151–155 character window that must begin with the focus keyword, mention the warranty phrase, and end with a fixed per-category CTA. Added a formal LSI Keyword rule: exactly 3, embedded as plain text (never inside `<strong>`/`<b>`/a heading tag) — Rank Math doesn't detect a keyword it can't read as plain text. See §6.1, §6.2, §6.8.
 
 **Changelog v7.0 → v7.1:** Replaced the static "pre-registered official URL per brand" model with dynamic discovery: Agent 1 now searches the web for each product, prefers a result whose domain matches the brand (treated as "official"), falls back to Japan Electronics/Surmawala only if no matching official domain is found, and flags to Manual Review if neither is found — it never falls back to an arbitrary/unverified search result. See §5.3 and §9.
 **Date:** July 2026 | **Location:** Karachi, Pakistan
@@ -20,7 +24,7 @@ These are facts that must be confirmed from the live site, not assumed — get t
 2. Category parent mapping beyond `Home Appliance > Microwave Oven` — **not a manual export-and-write-down task.** The Taxonomy Manager (`phase2.md` §5.2) shows the tree with `needs_confirmation` flags and lets you set each `parent_id` inline, live, whenever you get to that category. Nothing blocks starting the build over this.
 3. Brand casing — **also not a manual spreadsheet task.** Confirmed real casing so far: `DAWLANCE` (all caps, from the verified sample). The Taxonomy Manager's `casing_confirmed` toggle is where the rest get confirmed, one at a time, live — not an upfront full-catalog audit.
 4. Export the current **SKU list** of all live products, to seed the duplicate-SKU guard (§8.6).
-5. `Item` has no confirmed meaning yet — adjustable anytime via the Taxonomy Manager frontend (activate/deactivate, set a parent), not a pre-build blocker. `Inverter` is a confirmed real category, not flagged.
+5. **RESOLVED 2026-07-21.** `Item` is a confirmed real top-level category (now seeded active). `Inverter` is **not** a category at all — it was invented in this document, reached the database, and matched every "Inverter AC" product; it has been removed. See §9.2 for the authoritative 26-category list.
 6. Confirm the exact WooCommerce Brands plugin in use (Perfect WooCommerce Brands / YITH / other) — affects whether `Brands` is a plain CSV column or requires a different import path.
 
 ---
@@ -122,22 +126,25 @@ Anything failing all automated checks (or auto-routed there per §3/§5.3) goes 
 
 ## 6. The Enterprise SEO Engine — Rank Math Blueprint
 
-### 6.1 Multi-Layer Keyword Generation
+### 6.1 Keyword Generation (v3.0 correction — reverses part of v8.0's "exactly one keyword" lock)
 
-- **Primary Keyword:** e.g., `Homage 20L HDG-201S Grill Microwave`.
-- **Secondary/LSI Keywords:** 9-12 additional keywords.
-- **Full focus keyword field:** 10 to 13 keywords, comma-separated (verified against the real sample: 10 keywords used).
+**v8.0 got this wrong.** It locked `Meta: rank_math_focus_keyword` to a single keyword with no comma-stacking, reasoning that Rank Math only supports one focus keyword. **Confirmed directly against the live Rank Math panel UI (not a guess):** Rank Math natively supports a primary keyword plus secondary/related keywords as pills in its own interface, and its own scoring explicitly says *"Keyword Density... the Focus Keyword **and combination** appears N times."* Real reference exports confirm the same pattern: `Meta: rank_math_focus_keyword` = Product Name + 3 more comma-separated phrases.
 
-### 6.2 Rank Math Placement Rules (v7.0: softened where over-optimization risk was found)
+- **Primary keyword:** still deterministically the exact Product Name — this part of v8.0 was right and is unchanged (not LLM output, never drifts).
+- **Exported focus keyword field = primary + 3 LSI keywords, comma-joined.** `build_focus_keyword_field()` assembles this at CSV-export time — no new keywords are generated for this; it reuses the same 3 LSI keywords the Writer already produces for the body/alt-text (below), so there's no duplicate generation step and no risk of the two lists disagreeing.
+- **LSI Keywords: exactly 3.** The Writer generates exactly 3 secondary/semantically-related keywords and weaves each one natively into the body copy (hero paragraph or feature text) as **plain text** — never inside a `<strong>`, `<b>`, or heading tag, since Rank Math cannot detect a keyword it can't read as plain prose. `html_sanitizer.py::strip_lsi_keyword_formatting()` strips any such wrapper tags found immediately around one of these 3 exact strings as a safety net, but the Writer is instructed to never wrap them in the first place.
+- **Image alt text:** each of the (up to 3) product image alt attributes must be exactly the Focus Keyword or one of the 3 LSI keywords — nothing else.
+
+### 6.2 Rank Math Placement Rules (v8.0 Production Lock)
 
 | Rule | Target | Why |
 |---|---|---|
 | URL slug | ≤ 75 characters | Rank Math flags long slugs |
 | `Name` | ≤ 44 characters | Keeps slug safely under 75 |
-| `Meta: rank_math_title` | One consistent, deliberately chosen format — **pick one** of `"[Product Name] \| Best Price"` or `"[Product Name] \| [Power Word] Price Online"` and use it consistently. The real verified sample used "Best Price" without an "in Pakistan" suffix even under 55 chars, contradicting the old v6.0 rule — this ambiguity must be resolved to one rule before Phase 2, not left with two contradictory versions alive. | Consistency across the catalog matters more than hitting an exact character count |
-| First 10% rule | Primary keyword in first 2 lines | Matches Rank Math's own test |
-| **Keyword density** | Primary keyword appears **naturally, typically 3–6 times**, prioritizing readable prose over a forced exact count | **v7.0 fix:** forcing an *exact* 5–6 occurrences of a long product-name phrase in ~300–500 words reads as keyword-stuffed under Google's current spam policies even while it scores green on Rank Math's own (checklist-based) metric — a high internal score is not the same as ranking well. Vary phrasing/synonyms across repeats instead of repeating the identical string. |
-| Meta description | Under 155 characters, ends with a CTA ("!") | Matches the real sample and Rank Math's test |
+| `Meta: rank_math_title` — **"Boss Title Rule" (v3.0: universal, not AC-only)** | Deterministic, category-aware, never LLM-written: `"[Brand] [Capacity] [Series] [SKU] [Premium Category Suffix]"` for every category with a registered suffix (e.g. AC → `"...DC Inverter Heat & Cool Split Air Conditioner"`, Microwave Oven → `"...Digital Grill Microwave Oven"`, Refrigerator → `"...Inverter Direct Cool Refrigerator"` — the full registry lives in `seo_title_builder.py::CATEGORY_TITLE_DESCRIPTORS`, one entry per category, edited there not in the LLM prompt). Any category not yet registered falls back to `"[Focus Keyword] \| Buy Smart"` rather than guessing a suffix. No character-length cap is enforced — the literal descriptors legitimately run well past 60 characters; the format itself is the compliance signal, not a length window. **Known limitation:** a per-category suffix is a generalization (e.g. assumes Split + Inverter + Heat&Cool for every AC) — an atypical product within a category (a Floor Standing unit, a non-inverter fridge) may get a technically-generic title suffix; the specs table and description still state the real configuration correctly, so this is an SEO-title nicety risk, not a product-data accuracy risk. | Deterministic titles guarantee 100/100 title compliance every time — no LLM drift, no missing suffix, no inconsistent format across the catalog. |
+| First 10% rule | Focus Keyword in first 10% of `hero_paragraph` | Matches Rank Math's own test |
+| **Keyword density** | Focus Keyword appears **naturally, typically 3–6 times** across all body text combined, varying phrasing on later repeats | Forcing an *exact* count of a long product-name phrase reads as keyword-stuffed under Google's spam policies even while it scores green on Rank Math's own checklist metric — a high internal score is not the same as ranking well. |
+| Meta description | **Strictly 151–155 characters.** Must (1) begin with the exact Focus Keyword, (2) mention the warranty's real duration number(s) (exact stored phrase wording not required — see v3.0 note below), (3) end with a fixed, category-specific CTA sentence (capacity-aware where relevant, e.g. `"Buy the best {actual capacity} AC in Pakistan today."` — never a hardcoded tonnage for every product in a category). **v3.0 correction:** a long Boss-Rule focus keyword can already consume most of the 151–155 budget, leaving no room for the full compound warranty sentence too — real reference examples abbreviate it (e.g. `"Warranty: 10-yr."`). The check now requires every duration number from the real warranty phrase to appear somewhere in the description (so a duration can never be silently dropped or invented), not an exact-string match. | Matches Rank Math's own length test with zero tolerance either side of the window, and every clause is independently checkable, not just a length bound. |
 
 ### 6.3 Content Structure
 
@@ -161,21 +168,27 @@ Agent 3 computes its own weighted score. If below 90, product goes back through 
 
 The verified real sample hardcodes this to `95` directly in the CSV. This is very likely **cosmetic only** — Rank Math recalculates the actual score client-side the next time the product is opened and saved in wp-admin, and a raw imported number may not reflect a real analysis. Do not treat a pre-set `95` as a verified pass; confirm the real behavior once against a staging import before relying on it for the "95+" success metric (§16).
 
-### 6.8 Programmatic SEO Validation Layer
+### 6.8 Programmatic SEO Validation Layer (v8.0 Production Lock, v3.1 thin-content addition — matches `seo_validator.py` exactly)
 
-Strict deterministic checks before content reaches CSV:
+Strict deterministic checks before content reaches CSV — implemented 1:1 in `backend/app/graph/seo_validator.py::validate_seo_rules()`:
 
 1. **Product Name Check:** `Name` ≤ 44 characters.
 2. **Slug Check:** ≤ 75 characters.
-3. **SEO Title Check:** matches the one chosen format (§6.2), 55–60 characters.
-4. **Meta Description Check:** ≤ 155 characters, ends with "!".
-5. **Keyword Usage Check:** natural, not force-counted (§6.2).
-6. **Keyword Stacking Check:** exactly 10 to 13 comma-separated keywords.
-7. **First 10% Rule:** Primary keyword in first 10% of text.
-8. **Warranty Consistency Check:** Exact string match across all 4 locations (§5.5).
-9. **Price Check:** Regular and Sale price must not be empty, sale < regular.
-10. **Template Completeness:** No empty placeholders.
-11. **Duplicate-SKU Check (v7.0 new):** `SKU` not already present in the live-catalog SKU export (§8.6).
+3. **Primary Focus Keyword Lock:** the *primary* keyword (used internally for the first-10%-rule, alt-text validation, etc.) is exactly one keyword, identical to the Product Name, no comma-stacking. The *exported CSV field* additionally appends the 3 LSI keywords via `build_focus_keyword_field()` (§6.1, v3.0) — that combination happens downstream at CSV-assembly time, after this check has already passed on the primary keyword alone, so this check's logic is unchanged even though the final CSV value does contain commas.
+4. **SEO Title — Boss Title Rule:** title matches the category's registered literal descriptor, or ends with the power-word marker (§6.2).
+5. **Meta Description Length:** strictly 151–155 characters.
+6. **Meta Description Begins With Focus Keyword.**
+7. **Meta Description Mentions Warranty:** every duration number from the real warranty phrase must appear (exact sentence wording not required, v3.0 correction).
+8. **Meta Description Ends With CTA:** the fixed, capacity-aware CTA sentence for the category, resolved once and reused identically by both the Writer's prompt and this check (never recomputed independently, so the two can't silently drift onto different claims).
+9. **LSI Keyword Count:** exactly 3.
+10. **LSI Keywords Present in Body:** all 3 appear as plain text in the concatenated content.
+11. **Image Alt Text Valid:** every image alt attribute is exactly the Focus Keyword or one of the 3 LSI keywords.
+12. **First 10% Rule:** Focus Keyword in first 10% of text.
+13. **Content Length Minimum (v3.1, closes a real gap):** concatenated body copy (hero paragraph + all feature texts + bullets + FAQ answers) must be ≥ 200 words. Nothing previously enforced a lower bound on content length — a technically-valid-but-thin response (short hero, short feature texts) could still pass every other check while reading as thin content to Google. `writer.py`'s prompt now also instructs a 40-word-minimum hero paragraph and 25-word-minimum per feature text so the LLM aims well above the floor, not right at it.
+14. **Warranty Consistency Check:** Exact string match across all 4 locations (§5.5).
+15. **Price Check:** Regular and Sale price must not be empty, sale < regular.
+16. **Template Completeness:** No empty placeholders.
+17. **Duplicate-SKU Check:** `SKU` not already present in the live-catalog SKU export (§8.6).
 
 ---
 
@@ -495,9 +508,9 @@ Tags are generated deterministically — no AI, no long-tail SEO keywords, no ma
 | -------------------------------- | --------------------------- | --------------------------------- |
 | `Short description`             | Short Description Renderer | Short Description Template (7.2) |
 | `Description`                   | Template merge (A or B)    | Template A or B (7.3)            |
-| `Meta: rank_math_focus_keyword` | Agent 2                    | 10-13 comma-separated keywords   |
-| `Meta: rank_math_title`         | Agent 2                    | One chosen format, see §6.2      |
-| `Meta: rank_math_description`   | Agent 2                    | Meta description template        |
+| `Meta: rank_math_focus_keyword` | Deterministic primary (name builder) + Agent 2's 3 LSI keywords | Primary keyword = Product Name; exported CSV cell is the primary keyword + 3 LSI keywords, comma-joined via `build_focus_keyword_field()` (v3.0, §6.1) |
+| `Meta: rank_math_title`         | Deterministic (`seo_title_builder.py`) | "Boss Title Rule" / power-word format, not Agent 2 output (§6.2) |
+| `Meta: rank_math_description`   | Agent 2                    | Strict 151-155 chars, begins with focus keyword, mentions warranty, ends with fixed CTA (§6.2) |
 
 ### 8.4 Deterministic-Builder Fields (Python Functions, No AI)
 
@@ -513,6 +526,8 @@ Tags are generated deterministically — no AI, no long-tail SEO keywords, no ma
 | `Height (cm)`                      | Agent 1 (or 0)             |                                                  |
 | `Meta: rank_math_breadcrumb_title` | Product Name Builder       | Same as Name                                    |
 | `Meta: rank_math_seo_score`        | _(empty or informational)_ | See §6.7 — treat as cosmetic, not a verified score |
+| `Meta: rank_math_focus_keyword`    | Name Builder (v8.0) + Agent 2's LSI keywords | Primary keyword locked to exact Name, single keyword, no stacking; exported CSV cell also appends the 3 LSI keywords (v3.0 correction, §6.1) |
+| `Meta: rank_math_title`            | `seo_title_builder.py` (v8.0) | "Boss Title Rule" / power-word format (§6.2) — moved here from §8.3 (AI-Generated) since v8.0 makes both fields deterministic, not Agent 2 output |
 
 ### 8.5 Images Field
 
@@ -572,8 +587,8 @@ Left **empty** in CSV for V1. Manual upload after import.
 | 42  | `Meta: _woodmart_product_custom_tab_priority`     | Fixed: `20`              | Static Default |
 | 43  | `Meta: _woodmart_product_custom_tab_content_type` | Fixed: `text`           | Static Default |
 | 44  | `Meta: _woodmart_product_custom_tab_content`      | Specs Renderer           | Deterministic  |
-| 45  | `Meta: rank_math_focus_keyword`                   | Agent 2                  | AI Generated   |
-| 46  | `Meta: rank_math_title`                           | Agent 2                  | AI Generated   |
+| 45  | `Meta: rank_math_focus_keyword`                   | Primary keyword (Name Builder, deterministic) + 3 LSI keywords (Agent 2), joined by `build_focus_keyword_field()` (v3.0, §6.1) | Deterministic + AI Generated |
+| 46  | `Meta: rank_math_title`                           | `seo_title_builder.py::build_seo_title()` — Boss Title Rule (v8.0 Production Lock); NOT written by the LLM | Deterministic  |
 | 47  | `Meta: rank_math_description`                     | Agent 2                  | AI Generated   |
 | 48  | `Meta: rank_math_seo_score`                       | Empty or informational   | See §6.7       |
 | 49  | `Meta: rank_math_breadcrumb_title`                | Name Builder              | Deterministic  |
@@ -598,41 +613,52 @@ Left **empty** in CSV for V1. Manual upload after import.
 
 ### 9.1 Official Brand List (verify exact casing against live taxonomy before build — do not normalize without checking, §0 item 3)
 
-1. Anex | 2. Boss | 3. DAWLANCE | 4. EcoStar | 5. ELite | 6. GFC | 7. GREE | 8. HAIER | 9. Hanco | 10. Homage | 11. Hotline | 12. Kenwood | 13. Login | 14. Midea | 15. NASGAS | 16. ORIENT | 17. Panasonic | 18. PEL | 19. Philips | 20. Royal Fans | 21. SG | 22. Super Asia | 23. TCL | 24. WestPoint Pakistan
+1. Anex | 2. Boss | 3. DAWLANCE | 4. EcoStar | 5. ELite | 6. Gaba National | 7. GFC | 8. GREE | 9. HAIER | 10. Hanco | 11. Homage | 12. Hotline | 13. Kenwood | 14. Login | 15. Midea | 16. NASGAS | 17. ORIENT | 18. Panasonic | 19. PEL | 20. Philips | 21. Royal Fans | 22. SG | 23. Super Asia | 24. TCL | 25. WestPoint Pakistan
+
+*(v3.0: added `Gaba National` — confirmed present in the live catalog's own real export sample, a "Gaba National GNW-95023 Twin Tub Baby Washing Machine," not a guess.)*
 
 *Casing above (mix of Title Case and ALL CAPS) is preserved as-is because the verified real sample shows `DAWLANCE` stored in all caps in the live taxonomy — this may be intentional/authoritative per term, not a documentation typo. Confirm each entry against the real Brands export (§0 item 3) before treating this list as final.*
 
-### 9.2 Official Category List + Parent Mapping (v7.0 — parent hierarchy now required for the `Categories` CSV field, §8.7)
+### 9.2 Official Category List + Parent Mapping (AUTHORITATIVE — confirmed by the site owner 2026-07-21)
 
-| # | Category | Parent (confirmed / needs confirmation) |
+**This is the exact live WooCommerce taxonomy: 4 top-level categories, 16 Home Appliance
+sub-categories, 6 Kitchen Appliances sub-categories = 26 total. Nothing may be added to it.**
+A brand or category not on this list routes the product to Manual Review — it is never created
+on the fly, because WooCommerce silently CREATES any unrecognised term on import, adding junk to
+the live store. Locked by `backend/tests/unit/test_taxonomy_lock.py`.
+
+Two entries previously invented in this document reached the database and caused real damage,
+and have been removed: **"Inverter"** (matched every "Inverter AC", escalating them all) and
+**"Water Heater"** (never existed on the live site).
+
+| # | Category | Parent |
 |---|---|---|
-| 1 | Beauty | *(needs confirmation)* |
+| 1 | Beauty | — (top-level) |
 | 2 | Home Appliance | — (top-level) |
-| 3 | Air conditioner | Home Appliance *(likely, needs confirmation)* |
-| 4 | Air cooler | Home Appliance *(likely, needs confirmation)* |
-| 5 | Air Purifier | Home Appliance *(likely, needs confirmation)* |
-| 6 | Deep Freezer | Home Appliance *(likely, needs confirmation)* |
-| 7 | Deerma | *(needs confirmation — possibly a brand, not a category)* |
-| 8 | Fans | Home Appliance *(likely, needs confirmation)* |
-| 9 | Garment Steam Iron | Home Appliance *(likely, needs confirmation)* |
-| 10 | Geyser | Home Appliance *(likely, needs confirmation)* |
-| 11 | Heater | Home Appliance *(likely, needs confirmation)* |
-| 12 | Insect Killer | Home Appliance *(likely, needs confirmation)* |
-| 13 | Led TV | Home Appliance *(likely, needs confirmation)* |
-| 14 | Microwave Oven | **Home Appliance (CONFIRMED from real sample)** |
-| 15 | Refrigerator | Home Appliance *(likely, needs confirmation)* |
-| 16 | Vacuum Cleaner | Home Appliance *(likely, needs confirmation)* |
-| 17 | Washing machine | Home Appliance *(likely, needs confirmation)* |
-| 18 | Water Dispenser | Home Appliance *(likely, needs confirmation)* |
-| 19 | Inverter | Confirmed real category — parent tbd via Taxonomy Manager |
-| 20 | Item | Meaning unconfirmed — adjustable anytime via Taxonomy Manager (activate/deactivate/set parent), not a pre-build blocker |
-| 21 | Kitchen Appliances | — (top-level, likely) |
-| 22 | Air Fryer | Kitchen Appliances *(likely, needs confirmation)* |
-| 23 | Blender | Kitchen Appliances *(likely, needs confirmation)* |
-| 24 | Coffee Maker | Kitchen Appliances *(likely, needs confirmation)* |
-| 25 | Electric Kettle | Kitchen Appliances *(likely, needs confirmation)* |
-| 26 | Hotplate | Kitchen Appliances *(likely, needs confirmation)* |
-| 27 | Oven Toaster | Kitchen Appliances *(likely, needs confirmation)* |
+| 3 | Air conditioner | Home Appliance |
+| 4 | Air cooler | Home Appliance |
+| 5 | Air Purifier | Home Appliance |
+| 6 | Deep Freezer | Home Appliance |
+| 7 | Deerma | Home Appliance |
+| 8 | Fans | Home Appliance |
+| 9 | Garment Steam Iron | Home Appliance |
+| 10 | Geyser | Home Appliance |
+| 11 | Heater | Home Appliance |
+| 12 | Insect Killer | Home Appliance |
+| 13 | Led TV | Home Appliance |
+| 14 | Microwave Oven | Home Appliance |
+| 15 | Refrigerator | Home Appliance |
+| 16 | Vacuum Cleaner | Home Appliance |
+| 17 | Washing machine | Home Appliance |
+| 18 | Water Dispenser | Home Appliance |
+| 19 | Item | — (top-level) |
+| 20 | Kitchen Appliances | — (top-level) |
+| 21 | Air Fryer | Kitchen Appliances |
+| 22 | Blender | Kitchen Appliances |
+| 23 | Coffee Maker | Kitchen Appliances |
+| 24 | Electric Kettle | Kitchen Appliances |
+| 25 | Hotplate | Kitchen Appliances |
+| 26 | Oven Toaster | Kitchen Appliances |
 
 *All "likely, needs confirmation" parents are reasonable guesses from category naming, not verified against the real exported tree yet — but this isn't a pre-build blocker either: the Taxonomy Manager (`phase2.md` §5.2) is exactly where you confirm or correct each parent mapping, live, at any time. `needs_confirmation=true` just means "don't trust this one for a live export yet," not "stop and go check wp-admin before writing code."*
 

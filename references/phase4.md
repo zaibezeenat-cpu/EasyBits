@@ -19,6 +19,7 @@ There is no API key exchange with WooCommerce. The only things that need to happ
 - Real taxonomy/SKU data gets pulled out of the live site (as file exports, done manually in wp-admin — read-only, zero risk) and loaded into *our* Supabase tables.
 - The CSV column mapping gets re-verified against a **fresh** real export, in case a plugin update changed anything since `phase1.md` v7.0 was written.
 - The manual CSV-import path is rehearsed once against real (but Draft) data before it's used for daily work.
+- we will implement woocommerce rest api integration later when this core done and start working, but for now, the only connection is the CSV export/import.
 
 ### 1.2 Steps
 

@@ -1,0 +1,25 @@
+# Secrets must NEVER enter the image layers.
+.env
+.env.*
+!.env.example
+
+# Python noise and local artifacts.
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local scratch / test outputs.
+scripts/_*.log
+scripts/_*.csv
+
+# VCS / editor.
+.git/
+.gitignore
+.idea/
+.vscode/

@@ -1,0 +1,260 @@
+"""
+Harvests series and feature terms from how other sellers title the same model.
+
+The goal is a product title that uses the naming customers actually search for
+("Luxury Ultra", "Titan", "Inverter Split") instead of only the bare spec
+fields. The hard constraint is accuracy: a term that reaches the title is a
+public claim about the product, so this module is built to REJECT terms far
+more readily than to accept them.
+
+Two independent gates before a term can be used:
+
+  1. CORROBORATION -- the term must appear in titles from at least two distinct
+     sources. A single seller's marketing adjective ("Super Deluxe Best Price")
+     is not evidence about the hardware; two independent sellers using the same
+     term is.
+
+  2. NO CONTRADICTION -- the term must not conflict with a confirmed extracted
+     fact. If extraction confirms the compressor is non-inverter, "Inverter"
+     cannot enter the title no matter how many sellers use it.
+
+Anything that fails either gate is dropped silently. A shorter title is always
+preferable to a title asserting something unverified.
+"""
+import re
+from collections import Counter
+from typing import Iterable, Optional
+
+from pydantic import BaseModel
+
+# Marketing filler that describes the listing, not the product. These never
+# belong in a product title even when every competitor uses them.
+_STOPWORDS = {
+    "best", "price", "in", "pakistan", "buy", "online", "sale", "new", "latest",
+    "original", "official", "genuine", "free", "delivery", "shipping", "offer",
+    "discount", "cheap", "lowest", "model", "series", "with", "and", "for",
+    "the", "a", "an", "of", "brand", "warranty", "years", "year", "installation",
+    "store", "shop", "product", "products", "rs", "pkr", "karachi", "lahore",
+    "islamabad", "wholesale", "retail", "imported", "stock", "available",
+}
+
+# NOTE: there is deliberately NO list of known feature terms here.
+#
+# An earlier version hardcoded AC vocabulary ("inverter", "heat & cool", "t3",
+# "frost free"...). The catalogue spans 26 categories -- juicers, dispensers,
+# ovens, fans, televisions, blenders -- so such a list is guaranteed to be
+# incomplete and would silently fail to verify terms for every category it did
+# not anticipate, exactly the way an invented "Inverter" category once broke
+# every inverter AC.
+#
+# The rule below is category-agnostic instead: a term may enter a product title
+# only if its words actually appear in the facts extraction confirmed for THIS
+# product, whatever category it belongs to. That needs no vocabulary, scales to
+# any new category automatically, and is strictly safer -- an unrecognised term
+# is rejected rather than waved through.
+
+
+class TitleTerm(BaseModel):
+    term: str
+    frequency: int
+    corroborated: bool
+    verified: bool
+    reason: str = ""
+
+
+def _normalise(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9&\- ]+", " ", text or "")).strip()
+
+
+def _tokens_to_drop(brand: str, model: str, capacity: str, product_type: str) -> set[str]:
+    """Words already represented by other parts of the Boss Rule formula."""
+    drop = set(_STOPWORDS)
+    for part in (brand, model, capacity, product_type):
+        for token in _normalise(part or "").lower().split():
+            drop.add(token)
+            drop.add(token.rstrip("s"))
+    return drop
+
+
+def harvest_title_terms(
+    titles: Iterable[str],
+    brand: str,
+    model: str,
+    capacity: str = "",
+    product_type: str = "",
+    min_frequency: int = 2,
+) -> list[TitleTerm]:
+    """
+    Extracts candidate series/feature phrases from competitor titles, ranked by
+    how many distinct titles use them.
+
+    Only titles that actually name the model are considered -- a title for a
+    different product tells us nothing about this one. Consecutive surviving
+    words are joined into phrases so "Luxury Ultra" stays together rather than
+    becoming two unrelated tokens.
+    """
+    drop = _tokens_to_drop(brand, model, capacity, product_type)
+    model_key = re.sub(r"[^a-z0-9]", "", (model or "").lower())
+
+    phrase_counts: Counter[str] = Counter()
+    for raw_title in titles:
+        if not raw_title:
+            continue
+        # Only trust titles that are actually about this model.
+        if model_key and model_key not in re.sub(r"[^a-z0-9]", "", raw_title.lower()):
+            continue
+
+        words = _normalise(raw_title).split()
+        runs: list[list[str]] = []
+        run: list[str] = []
+        for word in words + [""]:
+            key = word.lower().strip("-&")
+            is_noise = (not key) or key in drop or key.isdigit() or len(key) < 2
+            if is_noise:
+                if run:
+                    runs.append(run)
+                    run = []
+            else:
+                run.append(word)
+
+        # Emit every 1-to-3-word sub-phrase, not just whole runs. Sellers order
+        # and pad their titles differently ("EZ Glass Door Bottom Load" vs
+        # "Glass Door Bottom Load"), so whole-run matching almost never agrees
+        # and nothing would ever reach the corroboration threshold.
+        # Up to 4 words: real product phrases run that long ("Glass Door Bottom
+        # Load"), and a 3-word cap truncated them mid-phrase.
+        phrases_in_title: set[str] = set()
+        for candidate_run in runs:
+            for size in (1, 2, 3, 4):
+                for start in range(len(candidate_run) - size + 1):
+                    phrases_in_title.add(" ".join(candidate_run[start:start + size]))
+
+        # Count each phrase once per title, so one verbose seller cannot
+        # manufacture a majority on its own.
+        for phrase in phrases_in_title:
+            phrase_counts[phrase] += 1
+
+    # Prefer the longest phrase: if "Glass Door" and "Glass" are equally common,
+    # the fuller phrase is the real term and the fragment is noise.
+    #
+    # Compared as WORD SEQUENCES, not substrings: plain `in` matched across word
+    # boundaries and wrongly deleted "Stainless Steel" because the unrelated
+    # phrase "Fruit Juicer Stainless" happened to contain the letters.
+    def is_subsequence(short_words: tuple[str, ...], long_words: tuple[str, ...]) -> bool:
+        n = len(short_words)
+        return any(long_words[i:i + n] == short_words for i in range(len(long_words) - n + 1))
+
+    as_words = {p: tuple(p.lower().split()) for p in phrase_counts}
+    redundant = {
+        short
+        for short, short_count in phrase_counts.items()
+        for long, long_count in phrase_counts.items()
+        if short != long
+        and len(as_words[short]) < len(as_words[long])
+        and is_subsequence(as_words[short], as_words[long])
+        and long_count >= short_count
+    }
+
+    return [
+        TitleTerm(
+            term=phrase,
+            frequency=count,
+            corroborated=count >= min_frequency,
+            verified=False,
+            reason="" if count >= min_frequency else
+                   f"appears in only {count} title(s); needs {min_frequency}",
+        )
+        for phrase, count in phrase_counts.most_common()
+        if phrase not in redundant
+    ]
+
+
+def verify_terms(
+    terms: list[TitleTerm],
+    confirmed_facts: Optional[dict[str, Optional[str]]] = None,
+    series: Optional[str] = None,
+) -> list[TitleTerm]:
+    """
+    Marks which corroborated terms are safe to put in a product title.
+
+    ONE RULE, APPLIED TO EVERY CATEGORY: every word of the term must appear in
+    the facts extraction confirmed for this product. No per-category vocabulary,
+    no exceptions by product type -- an air conditioner, a juicer and a water
+    dispenser are all judged the same way.
+
+    The single allowance is `series`, the manufacturer's product line, which is
+    matched against the extracted series value rather than the spec text: a
+    series name ("Luxury Ultra", "Titan") identifies the model rather than
+    asserting a capability, and it does not appear in the specifications.
+
+    "UNKNOWN" facts count as absent, so a capability extraction could not
+    confirm can never be justified by sellers repeating it.
+    """
+    facts = confirmed_facts or {}
+    haystack = " ".join(
+        str(v) for v in facts.values()
+        if v and str(v).strip().upper() != "UNKNOWN"
+    ).lower()
+    series_key = (series or "").strip().lower()
+
+    verified: list[TitleTerm] = []
+    for term in terms:
+        if not term.corroborated:
+            verified.append(term)
+            continue
+
+        key = term.term.lower()
+
+        if series_key and key in series_key:
+            verified.append(term.model_copy(update={
+                "verified": True,
+                "reason": "matches the extracted product series",
+            }))
+            continue
+
+        # Every meaningful word must be present in the confirmed facts.
+        words = [w for w in re.split(r"[^a-z0-9&]+", key) if len(w) > 2]
+        supported = bool(words) and all(word in haystack for word in words)
+
+        verified.append(term.model_copy(update={
+            "verified": supported,
+            "reason": (
+                "every word confirmed by extracted facts"
+                if supported else
+                "not confirmed by extracted facts for this product; rejected"
+            ),
+        }))
+    return verified
+
+
+def select_title_features(
+    terms: list[TitleTerm],
+    max_terms: int = 2,
+) -> list[str]:
+    """
+    Returns the verified terms to pass into build_name(), most-corroborated first.
+
+    Overlapping phrases are skipped: n-gram harvesting produces sibling phrases
+    from the same words ("Glass Door Bottom" and "Door Bottom Load"), and taking
+    both yielded the nonsense title "Door Bottom Load Glass Door Bottom Water
+    Dispenser". Once a word has been used, any later phrase repeating it is
+    dropped.
+
+    Capped because a title is a headline, not a spec sheet: two strong terms
+    read better and leave room for the full product type.
+    """
+    selected: list[str] = []
+    used_words: set[str] = set()
+
+    for term in terms:
+        if not term.verified:
+            continue
+        words = {w for w in term.term.lower().split() if len(w) > 2}
+        if words & used_words:
+            continue
+        selected.append(term.term)
+        used_words |= words
+        if len(selected) >= max_terms:
+            break
+
+    return selected
