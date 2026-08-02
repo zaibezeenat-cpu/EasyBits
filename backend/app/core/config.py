@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     # Pipeline Logic
     LLM_INTER_PRODUCT_DELAY_SECONDS: float = 1.0
 
+    # Max Chromium browser contexts open at once inside the shared browser.
+    # This is the RAM ceiling for scraping: each context is a real set of
+    # renderer processes (~150-250MB). It is deliberately SEPARATE from any
+    # domain-level fetch concurrency -- that fan-out is sized for cheap
+    # curl_cffi requests, and without this inner bound a burst of Playwright
+    # escalations would open that many contexts at once. Raise only against a
+    # measured RSS figure, never by guess.
+    MAX_PLAYWRIGHT_CONTEXTS: int = 2
+
     # Auth
     APP_AUTH_SECRET: str
     APP_JWT_SIGNING_KEY: Optional[str] = None

@@ -1,8 +1,10 @@
+import asyncio
 import re
 
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 from app.scraping.models import ScrapeResult
+from app.core.config import settings
 from app.core.logging import logger
 
 # BUG FIX (Phase 3 integration test, real LLM calls): raw page.content() is
@@ -167,11 +169,155 @@ def _clean_html_to_text(html: str) -> str:
     return cleaned[:_MAX_CLEANED_CONTENT_CHARS]
 
 
+# --- Pooled browser -------------------------------------------------------
+# One Chromium process for the life of the run, a fresh CONTEXT per fetch.
+#
+# WHY: launching a browser costs 1-3s, and the old code did it for EVERY URL --
+# `async_playwright()` + `chromium.launch()` + `close()` per call. A product can
+# make up to MAX_SCRAPE_ATTEMPTS (25) fetches, so the launch cost alone dominated
+# the pipeline. Reusing one browser removes that cost entirely.
+#
+# A new context per fetch (rather than a new page on a shared context) is what
+# keeps sites isolated: each context has its own cookie jar, storage and cache,
+# so nothing a site sets can follow us to the next one. That matters for
+# bot-protection that tracks state across requests -- with a shared context, one
+# site's Cloudflare clearance cookie would ride along to every later fetch.
+_playwright = None
+_browser = None
+
+# The lock and semaphore are shared state, but they CANNOT simply be created at
+# module import. An asyncio primitive binds itself to the event loop that first
+# blocks on it, and raises "is bound to a different event loop" if it is ever
+# awaited from another one. That is not hypothetical here: `asyncio.run()` builds
+# a fresh loop each call, so a second batch in the same process (or, in tests, a
+# second test function) would hit it. Measured: 5 of 6 concurrent fetches in a
+# second loop failed this way -- and because the failure is caught and returned
+# as success=False, it does not crash. It silently deletes sources, which in this
+# pipeline means products escalating to Manual Review for no real reason.
+#
+# So they are rebuilt whenever the running loop changes. A browser launched on a
+# dead loop is unusable too (its transport belongs to that loop), so it is
+# dropped at the same time rather than handed out and failing on first use.
+_init_lock: asyncio.Lock | None = None
+_context_semaphore: asyncio.Semaphore | None = None
+_primitives_loop = None
+
+
+def _get_primitives() -> tuple[asyncio.Lock, asyncio.Semaphore]:
+    """The init lock and context semaphore, bound to the CURRENT event loop."""
+    global _init_lock, _context_semaphore, _primitives_loop, _playwright, _browser
+
+    loop = asyncio.get_running_loop()
+    if _primitives_loop is not loop:
+        if _primitives_loop is not None:
+            logger.warning(
+                "Event loop changed; rebuilding scraper primitives and dropping the "
+                "browser launched on the previous loop."
+            )
+            # Cannot be closed cleanly -- the loop that owned them is gone.
+            _playwright = None
+            _browser = None
+        _init_lock = asyncio.Lock()
+        # Bounds how many contexts (each a real set of renderer processes) exist
+        # at once. Separate from, and nested inside, any domain-level fetch
+        # concurrency: that fan-out is sized for cheap curl_cffi requests, and
+        # without this inner bound a burst of Tier-2 escalations would open that
+        # many browsers' worth of RAM.
+        _context_semaphore = asyncio.Semaphore(settings.MAX_PLAYWRIGHT_CONTEXTS)
+        _primitives_loop = loop
+
+    return _init_lock, _context_semaphore
+
+# Never needed to read a product page: `page.content()` returns the DOM, so
+# images, fonts, stylesheets and video are pure download cost. Scripts and XHR
+# are deliberately NOT blocked -- those are what render the catalogue on the
+# JS-heavy pages that make Tier 2 necessary in the first place.
+_BLOCKED_RESOURCE_TYPES = frozenset({"image", "media", "font", "stylesheet"})
+
+
+async def _block_heavy_resources(route) -> None:
+    """Abort requests for assets that never affect extracted text."""
+    try:
+        if route.request.resource_type in _BLOCKED_RESOURCE_TYPES:
+            await route.abort()
+        else:
+            await route.continue_()
+    except Exception as e:
+        # A route can be torn down mid-flight when the page navigates or the
+        # context closes. Never let that surface as a scrape failure -- but log
+        # it, because a FLOOD of these would mean the block rule is misbehaving.
+        logger.debug(f"Route handling skipped for {getattr(route.request, 'url', '?')}: {e}")
+
+
+async def _get_browser():
+    """
+    The shared browser, launched on first use.
+
+    Double-checked locking: the fast path takes no lock, and the slow path
+    re-tests inside the lock so two concurrent first-time callers cannot each
+    launch a browser and leave one orphaned with nothing holding a reference to
+    close it. `is_connected()` also covers a browser that died mid-run -- it is
+    relaunched rather than every subsequent fetch failing.
+    """
+    global _playwright, _browser
+
+    # Resolves loop-bound primitives first -- it also drops a browser inherited
+    # from a previous event loop, so the check below cannot hand one out.
+    init_lock, _ = _get_primitives()
+
+    if _browser is not None and _browser.is_connected():
+        return _browser
+
+    async with init_lock:
+        if _browser is not None and _browser.is_connected():
+            return _browser
+        # .start() instead of `async with`: the driver must outlive this call.
+        _playwright = await async_playwright().start()
+        _browser = await _playwright.chromium.launch(headless=True)
+        logger.info("Launched shared Chromium instance for scraping.")
+    return _browser
+
+
+async def shutdown_browser() -> None:
+    """
+    Close the shared browser and driver. Safe to call when nothing was launched,
+    and safe to call twice.
+
+    Must run at the end of a batch: the browser is a real OS process and will
+    outlive the run otherwise.
+    """
+    global _playwright, _browser
+    init_lock, _ = _get_primitives()
+    async with init_lock:
+        if _browser is not None:
+            try:
+                await _browser.close()
+            except Exception as e:
+                logger.warning(f"Error closing shared browser: {e}")
+            _browser = None
+        if _playwright is not None:
+            try:
+                await _playwright.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping Playwright driver: {e}")
+            _playwright = None
+
+
 class PlaywrightEngine:
     async def scrape_url(self, url: str, model_number: str = "") -> ScrapeResult:
-        async with async_playwright() as p:
+        try:
+            browser = await _get_browser()
+        except Exception as e:
+            logger.error(f"Could not start Playwright for {url}: {e}")
+            return ScrapeResult(
+                url=url, content="", engine_used="playwright",
+                success=False, error_message=str(e),
+            )
+
+        _, context_semaphore = _get_primitives()
+        async with context_semaphore:
+            context = None
             try:
-                browser = await p.chromium.launch(headless=True)
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
                     # A headless 0x0 screen is itself a detection signal; a real
@@ -179,6 +325,7 @@ class PlaywrightEngine:
                     viewport={"width": 1920, "height": 1080},
                     locale="en-US",
                 )
+                await context.route("**/*", _block_heavy_resources)
                 page = await context.new_page()
 
                 # Stealth: hide the headless fingerprint (navigator.webdriver,
@@ -216,8 +363,6 @@ class PlaywrightEngine:
                 links = extract_product_links(raw_html, url, model_number) if model_number else []
                 titles = extract_candidate_titles(raw_html, model_number) if model_number else []
 
-                await browser.close()
-
                 return ScrapeResult(
                     url=url,
                     content=content,
@@ -235,6 +380,18 @@ class PlaywrightEngine:
                     success=False,
                     error_message=str(e)
                 )
+            finally:
+                # ALWAYS, on every path including a goto timeout. The old code
+                # closed the browser inside the try, after the retry loop, so a
+                # timeout skipped the close entirely -- harmless only because
+                # `async with async_playwright()` tore the whole driver down on
+                # the way out. The pooled browser removes that safety net, so an
+                # unclosed context here would leak for the rest of the batch.
+                if context is not None:
+                    try:
+                        await context.close()
+                    except Exception as e:
+                        logger.warning(f"Error closing browser context for {url}: {e}")
 
 async def scrape_with_playwright(url: str, model_number: str = "") -> ScrapeResult:
     """
