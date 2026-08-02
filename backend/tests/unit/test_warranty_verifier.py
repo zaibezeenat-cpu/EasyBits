@@ -6,8 +6,8 @@ input sheet, repeated in four places on the live product, and is a claim the
 business is then obliged to honour. Publishing "10 years" when the real cover is
 1 year is a commercial liability, not a formatting bug.
 """
-import pytest
 
+import pytest
 from app.builders.warranty_verifier import (
     build_source_text,
     extract_durations,
@@ -16,10 +16,18 @@ from app.builders.warranty_verifier import (
 )
 
 
+async def _no_setting(_key):
+    """Stand-in for settings_repo.get_setting so unit tests never touch Supabase."""
+    return None
+
+
 # --- Duration extraction ----------------------------------------------------
 
+
 def test_extracts_multiple_durations_from_a_real_warranty_phrase():
-    durations = extract_durations("10 Years Compressor Warranty; 5 Years All Parts Warranty")
+    durations = extract_durations(
+        "10 Years Compressor Warranty; 5 Years All Parts Warranty"
+    )
     assert durations == ["10 year", "5 year"]
 
 
@@ -28,7 +36,7 @@ def test_abbreviated_forms_are_understood():
 
 
 def test_months_convert_to_years_when_they_divide_evenly():
-    """"24 months" and "2 years" are the same cover and must not look like a conflict."""
+    """ "24 months" and "2 years" are the same cover and must not look like a conflict."""
     assert extract_durations("24 months warranty") == ["2 year"]
     assert extract_durations("18 months warranty") == ["18 month"]
 
@@ -39,6 +47,7 @@ def test_no_duration_returns_empty():
 
 
 # --- Verification -----------------------------------------------------------
+
 
 def test_matching_warranty_is_confirmed():
     check = verify_warranty(
@@ -97,28 +106,44 @@ async def test_retailer_warranty_difference_does_not_escalate(monkeypatch):
     from app.models.raw_input import RawProductInput
 
     async def fake_scrape(_brand, _model, **_kw):
-        return {"scraped_data": [{
-            "url": "https://surmawala.pk/products/x",
-            "source_type": "trusted_secondary",
-            "content": "Haier HRF-246 IPGA. 3 year parts warranty. Smart Inverter.",
-        }]}
+        return {
+            "scraped_data": [
+                {
+                    "url": "https://surmawala.pk/products/x",
+                    "source_type": "trusted_secondary",
+                    "content": "Haier HRF-246 IPGA. 3 year parts warranty. Smart Inverter.",
+                }
+            ]
+        }
 
     monkeypatch.setattr(nodes, "scrape_product", fake_scrape)
+    # extractor_node reads provided_source_mode from app_settings before it
+    # scrapes. Unpatched that is a REAL Supabase round-trip, so this test only
+    # passed on a machine with a reachable database and failed in CI (which sets
+    # SUPABASE_URL=http://localhost). None selects the "augment" default.
+    monkeypatch.setattr(nodes.settings_repo, "get_setting", _no_setting)
 
     state = PipelineState(
         product_id=uuid4(),
         batch_id=uuid4(),
         raw_input=RawProductInput(
-            sku="HRF-246-IPGA", model_number="HRF-246 IPGA",
-            brand_name="HAIER", category_name="Refrigerator", product_type="Refrigerator",
-            regular_price=Decimal("90000"), sale_price=Decimal("74999"),
+            sku="HRF-246-IPGA",
+            model_number="HRF-246 IPGA",
+            brand_name="HAIER",
+            category_name="Refrigerator",
+            product_type="Refrigerator",
+            regular_price=Decimal("90000"),
+            sale_price=Decimal("74999"),
             warranty_override="Compressor: 10 Year * Other part: 1 Year",
         ),
     )
 
     result = await nodes.extractor_node(state)
     # Whatever else happens downstream, it must NOT be a warranty conflict.
-    assert result.get("failure") is None or result["failure"].category != "warranty_conflict"
+    assert (
+        result.get("failure") is None
+        or result["failure"].category != "warranty_conflict"
+    )
 
 
 def test_electronics_part_tier_does_not_collide_with_other_parts_tier():
@@ -173,7 +198,9 @@ def test_sources_silent_on_warranty_is_not_a_conflict():
     Most retailer pages never mention warranty. That means "nothing to compare",
     NOT "verified" and NOT "conflict" -- it must not block the pipeline.
     """
-    check = verify_warranty("1 Year Official Warranty", "Kenwood 1.0 Ton Inverter AC. Rs 150,000.")
+    check = verify_warranty(
+        "1 Year Official Warranty", "Kenwood 1.0 Ton Inverter AC. Rs 150,000."
+    )
     assert check.checked is False
     assert warranty_conflict_detail(check) is None
 
@@ -202,15 +229,18 @@ def test_unparseable_input_warranty_is_not_verified():
 
 
 def test_build_source_text_concatenates_all_sources():
-    text = build_source_text([
-        {"content": "10 year compressor"},
-        {"content": "5 years parts"},
-    ])
+    text = build_source_text(
+        [
+            {"content": "10 year compressor"},
+            {"content": "5 years parts"},
+        ]
+    )
     assert "10 year compressor" in text and "5 years parts" in text
     assert build_source_text([]) == ""
 
 
 # --- Pipeline integration ---------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_warranty_mismatch_routes_product_to_manual_review(monkeypatch):
@@ -226,17 +256,24 @@ async def test_warranty_mismatch_routes_product_to_manual_review(monkeypatch):
     from app.models.raw_input import RawProductInput
 
     async def fake_scrape(_brand, _model, **_kw):
-        return {"scraped_data": [{
-            "url": "https://kenwood.com.pk/products/x",
-            # Warranty is only cross-checked against OFFICIAL sources, so the
-            # contradiction must come from one to escalate.
-            "source_type": "official",
-            # A DIRECT contradiction on the same component: sheet claims a
-            # 10-year compressor, this source states 5-year.
-            "content": "Kenwood KLU-12B03S. Includes only a 5 year compressor warranty.",
-        }]}
+        return {
+            "scraped_data": [
+                {
+                    "url": "https://kenwood.com.pk/products/x",
+                    # Warranty is only cross-checked against OFFICIAL sources, so the
+                    # contradiction must come from one to escalate.
+                    "source_type": "official",
+                    # A DIRECT contradiction on the same component: sheet claims a
+                    # 10-year compressor, this source states 5-year.
+                    "content": "Kenwood KLU-12B03S. Includes only a 5 year compressor warranty.",
+                }
+            ]
+        }
 
     monkeypatch.setattr(nodes, "scrape_product", fake_scrape)
+    # See the note in test_retailer_warranty_difference_does_not_escalate: this
+    # settings read is a live DB call unless it is patched out.
+    monkeypatch.setattr(nodes.settings_repo, "get_setting", _no_setting)
 
     state = PipelineState(
         product_id=uuid4(),

@@ -7,8 +7,10 @@
 
 # Backend
 backend/.venv/
-backend/__pycache__/
-backend/.pytest_cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
 backend/.env
 backend/app/builders/temp/
 
@@ -16,6 +18,7 @@ backend/app/builders/temp/
 frontend/node_modules/
 frontend/.next/
 frontend/.env.local
+frontend/tsconfig.tsbuildinfo
 
 # Supabase
 supabase/.temp/
