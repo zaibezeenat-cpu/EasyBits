@@ -6,6 +6,7 @@ from app.graph.pipeline import pipeline
 from app.graph.state import PipelineState
 from app.core.config import settings
 from app.core.budget_guard import check_budget_ok
+from app.scraping.playwright_client import shutdown_browser
 from app.sse import sse_manager
 from app.db.repositories.products import products_repo
 from app.db.repositories.batches import batches_repo
@@ -76,7 +77,20 @@ class BatchProcessor:
 
         await batches_repo.update_status(batch_id, "processing")
         products = await products_repo.get_by_batch(batch_id)
-        
+
+        try:
+            await BatchProcessor._run_products(batch_id, products)
+        finally:
+            # The scraper's shared Chromium is a real OS process that outlives
+            # this coroutine if nothing closes it. In `finally` so a crash or a
+            # cancelled batch cannot leave a browser running.
+            await shutdown_browser()
+
+        await batches_repo.update_status(batch_id, "completed")
+        sse_manager.notify(str(batch_id), {"event": "batch_completed"})
+
+    @staticmethod
+    async def _run_products(batch_id: UUID, products: list):
         for product in products:
             # 1. Budget Guard Check
             if not await check_budget_ok():
@@ -144,6 +158,3 @@ class BatchProcessor:
                 })
                 # Isolation: continue to next product
                 continue
-
-        await batches_repo.update_status(batch_id, "completed")
-        sse_manager.notify(str(batch_id), {"event": "batch_completed"})

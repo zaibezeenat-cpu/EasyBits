@@ -8,12 +8,32 @@ Tiered page fetch — the single entry point for getting a URL's HTML.
     Tier 3  (outside this module) operator-provided Details -- when both fail, the
             orchestrator escalates and the pasted Details are used.
 
-Tier 1 is used ONLY when it returns real product content. A block page, an empty
-JS shell (the model never appears), or curl_cffi being unavailable all fall
-through to Tier 2. Hard interactive challenges (Cloudflare Turnstile) survive both
-and correctly end at Tier 3 by design.
+WHY THE TIER-1 ACCEPTANCE RULE IS NOT JUST "DOES THE PAGE NAME THE MODEL"
+------------------------------------------------------------------------
+It used to be exactly that, and it was the single biggest cost in the pipeline.
+A shop that simply DOES NOT STOCK the product returns a perfectly good,
+fully-rendered page that just never names the model. The old rule read that as
+"Tier 1 failed" and launched a whole Chromium browser to re-confirm a "not
+found" that curl had already answered correctly.
+
+With 105+ configured sources and a product carried by only 3-5 of them, roughly
+20 of the 25 permitted scrape attempts per product were exactly this case --
+each paying a full browser launch. Measured: ~150s/product with discovery vs
+~32s/product with discovery disabled, i.e. ~79% of runtime spent proving
+absences the cheap fetch had already proven.
+
+So a missing model number is now split into two very different situations:
+
+  * the page RENDERED and genuinely lacks the product  -> trust it, no browser
+  * the page is an EMPTY JS SHELL that renders later   -> escalate, browser needed
+
+`_tier1_decision` below is that split, and it errs toward escalating: a wrong
+"escalate" costs a few seconds, a wrong "accept" loses a real source and can
+push a product into Manual Review.
 """
 import logging
+import time
+from typing import NamedTuple
 
 from app.scraping.models import ScrapeResult
 from app.scraping.playwright_client import (
@@ -26,6 +46,105 @@ from app.scraping.playwright_client import (
 from app.scraping.source_discovery import search_result_mentions_product
 
 logger = logging.getLogger(__name__)
+
+# Cleaned-text length below which a page is treated as too thin to have really
+# rendered. Deliberately a BACKSTOP, not the primary signal: character count says
+# nothing about whether the catalogue rendered, and a JS shell's nav + footer +
+# cookie banner + marketing copy can easily clear any threshold on its own. The
+# primary signal is whether product links are present (see _tier1_decision).
+_RENDERED_CONTENT_FLOOR_CHARS = 1500
+
+# Phrases an empty search-results page uses. Only ever consulted once the model
+# number is ALREADY known to be absent from the content, so the page is known not
+# to be our product either way -- these merely upgrade "probably not stocked" to
+# "definitely not stocked", letting us skip the browser even on a short page.
+_NO_RESULTS_MARKERS = (
+    "no products found",
+    "no products were found",
+    "no matching products",
+    "no results found",
+    "no result found",
+    "0 results",
+    "nothing matched",
+    "your search did not match",
+    "sorry, no products",
+    "try searching for",
+    "no products match",
+)
+
+
+class Tier1Decision(NamedTuple):
+    """Whether the cheap fetch is good enough, and why -- the reason string is
+    what makes the escalation mix visible in the logs."""
+
+    usable: bool
+    reason: str
+
+
+def _has_no_results_marker(content: str) -> bool:
+    lowered = (content or "").lower()
+    return any(marker in lowered for marker in _NO_RESULTS_MARKERS)
+
+
+def _tier1_decision(result: ScrapeResult | None, model_number: str) -> Tier1Decision:
+    """
+    Decide whether a Tier-1 result can be used as-is, and record why.
+
+    The interesting branch is the last one: the model number is absent. That is
+    either a real "this shop does not stock it" (usable -- the answer is correct
+    and cost nothing) or an unrendered JS shell (not usable -- the browser has to
+    run before we can conclude anything).
+
+    Product links are the discriminator. A server-rendered storefront page --
+    including an empty search-results page, which still renders its "you might
+    also like" grid -- carries product links in the DOM. An unrendered shell
+    carries none, because the catalogue has not been injected yet.
+    """
+    if result is None:
+        return Tier1Decision(False, "tier1_unavailable")
+    if not result.success:
+        return Tier1Decision(False, "tier1_request_failed")
+    if not result.content.strip():
+        return Tier1Decision(False, "tier1_empty_body")
+    if is_block_page(result.content):
+        return Tier1Decision(False, "block_page")
+
+    # No model to match against (e.g. following a category/landing page): any
+    # real, non-blocked page is fine. Unchanged behaviour.
+    if not model_number:
+        return Tier1Decision(True, "no_model_check")
+
+    if search_result_mentions_product(result.content, model_number):
+        return Tier1Decision(True, "model_found")
+
+    # --- The model is absent. Rendered-but-absent, or not yet rendered? ---
+
+    # An explicit "no results" message is proof the site's search RAN and found
+    # nothing. Conclusive on its own, regardless of page size.
+    if _has_no_results_marker(result.content):
+        return Tier1Decision(True, "explicit_no_results")
+
+    # Product links prove the catalogue rendered server-side. Paired with the
+    # length backstop so a near-empty page carrying one stray link cannot pass.
+    if result.product_links and len(result.content) >= _RENDERED_CONTENT_FLOOR_CHARS:
+        return Tier1Decision(True, "rendered_without_match")
+
+    # No links: most likely an unrendered shell, so the browser has to run.
+    #
+    # This deliberately accepts a false positive -- a genuinely rendered "out of
+    # stock" page that happens to carry NO product grid at all escalates and
+    # costs a browser to reach the same conclusion. That is the safe direction
+    # (costs speed, never accuracy), but it is logged under its own reason so its
+    # real-world frequency is visible rather than assumed.
+    if not result.product_links:
+        return Tier1Decision(False, "no_product_links")
+
+    return Tier1Decision(False, "content_below_floor")
+
+
+def _tier1_usable(result: ScrapeResult | None, model_number: str) -> bool:
+    """Boolean form of `_tier1_decision`, kept as the simple predicate."""
+    return _tier1_decision(result, model_number).usable
 
 
 async def _fetch_with_curl(url: str, model_number: str = "") -> ScrapeResult | None:
@@ -59,6 +178,11 @@ async def _fetch_with_curl(url: str, model_number: str = "") -> ScrapeResult | N
     if not html:
         return None
 
+    # `extract_product_links` already returns generic /product/ links even when
+    # none match the model, which is exactly what `_tier1_decision` needs to tell
+    # a rendered storefront from an unrendered shell -- so no change is needed
+    # here. With no model number the decision short-circuits before consulting
+    # links, so extracting them in that case would be pure work for nothing.
     return ScrapeResult(
         url=url,
         content=_clean_html_to_text(html),
@@ -69,35 +193,49 @@ async def _fetch_with_curl(url: str, model_number: str = "") -> ScrapeResult | N
     )
 
 
-def _tier1_usable(result: ScrapeResult | None, model_number: str) -> bool:
-    """Whether a Tier-1 result is good enough to skip the browser.
-
-    Usable means: present, successful, non-empty content, NOT an anti-bot page,
-    and -- when a model is given -- the content actually names the model. That last
-    clause catches a 200-OK empty JS shell that must escalate to Tier 2 rather than
-    be read as "no facts". With no model_number (e.g. following a category page) a
-    non-empty, non-block page is enough.
-    """
-    if result is None or not result.success or not result.content.strip():
-        return False
-    if is_block_page(result.content):
-        return False
-    if model_number:
-        return search_result_mentions_product(result.content, model_number)
-    return True
-
-
 async def smart_fetch(url: str, model_number: str = "") -> ScrapeResult:
     """Fetch a URL with the cheapest engine that works (Tier 1 -> Tier 2).
 
     The caller (orchestrator) still applies its own block/mention/follow logic on
     the returned result, so a still-blocked Tier-2 result flows through to the
     source_blocked / operator-Details fallback unchanged.
-    """
-    tier1 = await _fetch_with_curl(url, model_number)
-    if _tier1_usable(tier1, model_number):
-        logger.debug(f"Tier 1 (curl_cffi) served {url}")
-        return tier1  # not None: _tier1_usable guarantees it
 
-    logger.info(f"Tier 1 insufficient for {url}; escalating to Playwright (Tier 2).")
-    return await scrape_with_playwright(url, model_number)
+    Timing and the tier-1 decision reason are attached to `result.metadata` so the
+    orchestrator can report, per product, how many fetches escalated and why --
+    the measurement that tells us whether this optimisation is actually working.
+    """
+    tier1_started = time.perf_counter()
+    tier1 = await _fetch_with_curl(url, model_number)
+    tier1_ms = int((time.perf_counter() - tier1_started) * 1000)
+
+    decision = _tier1_decision(tier1, model_number)
+
+    # `tier1 is not None` is implied by decision.usable, but tested explicitly
+    # rather than asserted: `python -O` strips asserts, and the failure mode
+    # would be an AttributeError deep in the caller instead of a clean fallback.
+    if decision.usable and tier1 is not None:
+        logger.debug(f"Tier 1 (curl_cffi) served {url} [{decision.reason}] in {tier1_ms}ms")
+        tier1.metadata = {
+            **tier1.metadata,
+            "fetch_tier": 1,
+            "fetch_tier1_ms": tier1_ms,
+            "fetch_reason": decision.reason,
+        }
+        return tier1
+
+    logger.info(
+        f"Tier 1 insufficient for {url} [{decision.reason}] after {tier1_ms}ms; "
+        f"escalating to Playwright (Tier 2)."
+    )
+    tier2_started = time.perf_counter()
+    result = await scrape_with_playwright(url, model_number)
+    tier2_ms = int((time.perf_counter() - tier2_started) * 1000)
+
+    result.metadata = {
+        **result.metadata,
+        "fetch_tier": 2,
+        "fetch_tier1_ms": tier1_ms,
+        "fetch_tier2_ms": tier2_ms,
+        "fetch_reason": decision.reason,
+    }
+    return result
