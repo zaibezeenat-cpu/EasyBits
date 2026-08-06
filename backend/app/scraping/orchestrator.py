@@ -3,6 +3,7 @@ import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+from app.core.config import settings
 from app.models.failure import FailureInfo
 from app.scraping.fetcher import smart_fetch
 from app.scraping.playwright_client import is_block_page
@@ -27,6 +28,41 @@ MAX_SOURCES_FOR_CORROBORATION = 5
 # every URL pattern when the product simply is not listed there; this bounds the
 # worst case so one product cannot stall a whole batch.
 MAX_SCRAPE_ATTEMPTS = 25
+
+# Consecutive domains that may yield nothing before we conclude the remaining
+# list is not going to produce anything either.
+#
+# MEASURED on a real 2-product run (WF-6807, 2026-08-03): 13 domains were tried,
+# 2 produced a source and 11 produced nothing. The 2 useful ones answered in the
+# first 9 seconds; the other 11 cost 128 seconds and changed no output at all --
+# 93% of scrape time spent confirming absences. The configured source list is
+# ordered by trust, so once several consecutive domains in that order have
+# nothing, the tail almost never does either.
+MAX_CONSECUTIVE_EMPTY_DOMAINS = 5
+
+
+def _corroboration_satisfied(scraped_data: List[Dict[str, str]]) -> bool:
+    """
+    True once the sources in hand can already confirm facts, so further scraping
+    cannot change any answer.
+
+    This mirrors fact_corroboration's OWN rule rather than inventing a new one:
+    an OFFICIAL brand source stating a value is authoritative by itself. So with
+    an official source plus one independent cross-check, every field either
+    resolves now or never will -- scraping more domains only costs time.
+
+    Why not stop at the official source ALONE: the extra source is what fills
+    fields the brand's own page omits (brand sites list far less than retailers)
+    and gives a second opinion where they overlap. Without it, an omitted field
+    backed by nothing would escalate a product that a single retailer could have
+    completed.
+
+    The threshold is settings.MIN_SOURCES_WITH_OFFICIAL so it can be raised
+    without a code change if the review queue ever grows.
+    """
+    if len(scraped_data) < settings.MIN_SOURCES_WITH_OFFICIAL:
+        return False
+    return any(doc.get("source_type") == "official" for doc in scraped_data)
 
 
 async def _follow_to_detail_page(search_result, model_number: str,
@@ -142,6 +178,7 @@ async def scrape_product(
 
     scraped_data: List[Dict[str, str]] = []
     attempted = 0
+    consecutive_empty_domains = 0
     # Tracks whether any source served an anti-bot / CAPTCHA challenge rather than
     # a real page. If nothing usable is scraped AND a block was seen, the operator
     # is told to paste Details -- the actionable truth -- instead of the misleading
@@ -149,6 +186,29 @@ async def scrape_product(
     blocked = False
 
     for domain, candidates in by_domain.items():
+        # THE MAIN STOP. An official source plus one cross-check already confirms
+        # everything that is ever going to be confirmed, so the rest of the list
+        # cannot change a single output -- it can only cost time. On the measured
+        # run this fires at ~9s instead of running to the attempt ceiling at 137s.
+        if _corroboration_satisfied(scraped_data):
+            logger.info(
+                f"Corroboration satisfied for {brand_name} {model_number} with "
+                f"{len(scraped_data)} source(s) including an official one after "
+                f"{attempted} attempt(s); further sources cannot change the result."
+            )
+            break
+
+        # Diminishing returns. Covers the case the rule above cannot: a product
+        # with no official source available, where the old code would still walk
+        # the entire configured list one dead domain at a time.
+        if consecutive_empty_domains >= MAX_CONSECUTIVE_EMPTY_DOMAINS:
+            logger.info(
+                f"{consecutive_empty_domains} consecutive domains yielded nothing for "
+                f"{brand_name} {model_number}; stopping with {len(scraped_data)} source(s) "
+                f"rather than walking the remaining {len(by_domain) - attempted} domain(s)."
+            )
+            break
+
         # Stop once enough independent sources are in hand. With 20+ configured
         # retailers, scraping every one would take many minutes per product;
         # corroboration only needs a handful of agreeing sources, and domains are
@@ -166,6 +226,7 @@ async def scrape_product(
                 f"{model_number} with {len(scraped_data)} source(s); stopping to bound time."
             )
             break
+        sources_before_domain = len(scraped_data)
         for source in candidates:
             attempted += 1
             try:
@@ -285,6 +346,15 @@ async def scrape_product(
             if matched_template:
                 await remember_working_template(domain, matched_template)
             break  # this domain answered; move to the next one
+
+        # Feeds the diminishing-returns stop above. Counted per DOMAIN, not per
+        # URL pattern: one domain legitimately costs several attempts while its
+        # platform is identified, and counting those as separate misses would
+        # abandon the list far too early.
+        if len(scraped_data) > sources_before_domain:
+            consecutive_empty_domains = 0
+        else:
+            consecutive_empty_domains += 1
 
     if not scraped_data:
         if blocked:
