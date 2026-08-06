@@ -37,6 +37,18 @@ class Settings(BaseSettings):
     # measured RSS figure, never by guess.
     MAX_PLAYWRIGHT_CONTEXTS: int = 2
 
+    # How many sources are enough to stop scraping EARLY, provided one of them
+    # is the brand's OFFICIAL site. fact_corroboration treats an official source
+    # as authoritative on its own, so official + 1 cross-check already decides
+    # every field -- further domains cannot change a result, only cost time.
+    #
+    # Measured on a real run: the useful sources arrived in the first 9 seconds,
+    # then 128 more seconds were spent on 11 domains that produced nothing.
+    #
+    # Raise this if the Manual Review queue grows: more sources means more
+    # chances to fill a field the brand's own page omits, at the cost of speed.
+    MIN_SOURCES_WITH_OFFICIAL: int = 2
+
     # Auth
     APP_AUTH_SECRET: str
     APP_JWT_SIGNING_KEY: Optional[str] = None

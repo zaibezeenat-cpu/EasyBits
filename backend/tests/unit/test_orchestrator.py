@@ -124,3 +124,155 @@ async def test_a_scrape_exception_does_not_abort_the_product(one_source, monkeyp
     result = await orchestrator.scrape_product("Kenwood", "KLU-12B03S")
     # Escalates cleanly rather than raising out of the pipeline.
     assert "failure" in result
+
+
+# ---------------------------------------------------------------------------
+# WHEN TO STOP SCRAPING.
+#
+# Measured on a real 2-product run (2026-08-03): 13 domains were tried; 2 gave a
+# source in the first 9 seconds and 11 gave nothing over the next 128 seconds --
+# 93% of scrape time spent confirming absences that changed no output. These pin
+# the stop rules that end that, and equally pin that they do NOT fire early when
+# stopping would actually cost information.
+# ---------------------------------------------------------------------------
+
+
+def _domains(*specs):
+    """Build a resolve_sources stand-in: one search URL per (domain, source_type)."""
+    async def sources(_brand, _model, **_kw):
+        return [
+            {"url": f"https://{d}/search?q=x", "source_type": st, "domain": d}
+            for d, st in specs
+        ]
+    return sources
+
+
+def _stocked(url: str, model: str = "WF-6807"):
+    """
+    A domain that genuinely carries the product: its search page names the model
+    AND links to a detail page whose slug identifies it, which is what the
+    orchestrator requires before accepting anything as a source.
+    """
+    from urllib.parse import urlparse
+    if "/products/" in url:
+        return _result(url, f"{model} full specifications")
+    host = urlparse(url).netloc
+    return _result(url, f"Search results for {model}",
+                   links=[f"https://{host}/products/{model.lower()}"])
+
+
+def _not_stocked(url: str):
+    return _result(url, "No products found matching your search.")
+
+
+@pytest.fixture
+def _noop_template(monkeypatch):
+    async def noop(*_a, **_k):
+        return None
+    monkeypatch.setattr(orchestrator, "remember_working_template", noop)
+
+
+@pytest.mark.asyncio
+async def test_stops_once_official_plus_one_is_collected(monkeypatch, _noop_template):
+    """
+    THE MAIN WIN. fact_corroboration treats an official source as authoritative
+    on its own, so official + 1 cross-check already decides every field. The 11
+    domains after that cost 128s and changed nothing.
+    """
+    visited: list[str] = []
+
+    monkeypatch.setattr(orchestrator, "resolve_sources", _domains(
+        ("brand.pk", "official"),
+        ("shopA.pk", "trusted_secondary"),
+        ("shopB.pk", "trusted_secondary"),   # must never be reached
+        ("shopC.pk", "trusted_secondary"),
+        ("shopD.pk", "trusted_secondary"),
+    ))
+
+    async def fake_scrape(url, model_number=""):
+        visited.append(url)
+        return _stocked(url)
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    result = await orchestrator.scrape_product("WestPoint", "WF-6807")
+
+    assert len(result["scraped_data"]) == 2
+    assert not any("shopB" in u or "shopC" in u or "shopD" in u for u in visited), \
+        f"kept scraping after corroboration was satisfied: {visited}"
+
+
+@pytest.mark.asyncio
+async def test_does_not_stop_early_without_an_official_source(monkeypatch, _noop_template):
+    """
+    Two RETAILERS are not the same as official + 1. Without an authoritative
+    source the extra opinions are exactly what corroboration needs, so the early
+    stop must stay shut -- speed must never be bought with accuracy here.
+    """
+    monkeypatch.setattr(orchestrator, "resolve_sources", _domains(
+        ("shopA.pk", "trusted_secondary"),
+        ("shopB.pk", "trusted_secondary"),
+        ("shopC.pk", "trusted_secondary"),
+    ))
+
+    async def fake_scrape(url, model_number=""):
+        return _stocked(url)
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    result = await orchestrator.scrape_product("WestPoint", "WF-6807")
+
+    # All three collected: none of them is authoritative, so none is redundant.
+    assert len(result["scraped_data"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_gives_up_after_consecutive_empty_domains(monkeypatch, _noop_template):
+    """
+    The no-official-source case the rule above deliberately does not cover. The
+    configured list is ordered by trust, so once several consecutive domains have
+    nothing, the tail does not either -- walking all 105 proves nothing slowly.
+    """
+    visited: list[str] = []
+    monkeypatch.setattr(orchestrator, "resolve_sources", _domains(
+        *[(f"dead{i}.pk", "trusted_secondary") for i in range(20)]
+    ))
+
+    async def fake_scrape(url, model_number=""):
+        visited.append(url)
+        return _not_stocked(url)
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    result = await orchestrator.scrape_product("WestPoint", "WF-6807")
+
+    assert "failure" in result
+    assert len(visited) <= orchestrator.MAX_CONSECUTIVE_EMPTY_DOMAINS + 1, (
+        f"walked {len(visited)} dead domains; the diminishing-returns stop did not fire"
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_domain_streak_resets_on_a_hit(monkeypatch, _noop_template):
+    """
+    The streak counts CONSECUTIVE misses. A domain that delivers must reset it,
+    or a list with useful sources spread through it would be abandoned midway.
+    """
+    monkeypatch.setattr(orchestrator, "resolve_sources", _domains(
+        ("dead1.pk", "trusted_secondary"),
+        ("dead2.pk", "trusted_secondary"),
+        ("dead3.pk", "trusted_secondary"),
+        ("good.pk", "trusted_secondary"),     # resets the streak
+        ("dead4.pk", "trusted_secondary"),
+        ("dead5.pk", "trusted_secondary"),
+        ("good2.pk", "trusted_secondary"),    # must still be reached
+    ))
+
+    async def fake_scrape(url, model_number=""):
+        return _stocked(url) if "good" in url else _not_stocked(url)
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    result = await orchestrator.scrape_product("WestPoint", "WF-6807")
+
+    assert len(result["scraped_data"]) == 2, "the reset did not happen; good2.pk was never reached"
