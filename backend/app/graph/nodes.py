@@ -54,6 +54,7 @@ from app.builders.title_terms import (
 )
 from app.builders.html_sanitizer import strip_lsi_keyword_formatting
 from app.builders.internal_links import build_link_block
+from app.builders.lsi_keywords import repair_lsi_keywords
 from app.db.repositories.sources import sources_repo
 
 logger = logging.getLogger(__name__)
@@ -517,6 +518,26 @@ async def writer_node(state: PipelineState) -> Dict[str, Any]:
             human_prompt="Write the content now.",
             response_model=WriterOutput
         )
+
+        # Keep the LSI keywords tied to THIS product before anything else uses
+        # them. The Writer drifts to category-level phrases ("beauty tools for
+        # hair") and to unverified claims ("lightweight ..."), which waste the
+        # five keyword slots Rank Math scores and assert things no source
+        # confirmed. Anything not anchored to the brand, the model or a
+        # CONFIRMED spec is replaced with a phrase built from those same facts.
+        kept_lsi, rejected_lsi = repair_lsi_keywords(
+            list(writer_output.lsi_keywords),
+            brand=title_brand,
+            model=state.raw_input.model_number,
+            product_type=real_product_type,
+            facts=facts,
+        )
+        if rejected_lsi:
+            logger.info(
+                f"LSI keywords rejected for {state.raw_input.sku} (not anchored to the "
+                f"product): {rejected_lsi}; using {kept_lsi} instead."
+            )
+        writer_output.lsi_keywords = kept_lsi
 
         # Deterministic LSI guard: weave in any secondary keyword the model listed
         # but forgot to use in the body, so Rank Math's "LSI present" check passes.

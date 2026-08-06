@@ -3,6 +3,7 @@ from typing import List
 from app.models.writer_output import WriterOutput
 from app.models.review_result import SeoCheckResult
 from app.builders.name_builder import contains_forbidden_abbreviation
+from app.builders.seo_compliance import count_keyword_occurrences
 from app.builders.warranty_verifier import extract_durations
 from app.builders.seo_title_builder import (
     seo_title_contains_focus_keyword,
@@ -296,10 +297,11 @@ def validate_seo_rules(
         if kw.strip():
             all_keywords.append(kw.strip().lower())
             
-    # Deduplicate in case an LSI matches the secondary keyword
-    all_keywords = list(set(all_keywords))
-    
-    combined_occurrences = sum(concatenated_content.lower().count(kw) for kw in all_keywords)
+    # Counted through the SAME helper the density enforcer uses, so the guard
+    # that rewrites the copy and the check that grades it can never disagree
+    # about what the density is. Overlapping keywords are counted once -- see
+    # count_keyword_occurrences for why per-keyword counting overstated by 60%.
+    combined_occurrences = count_keyword_occurrences([concatenated_content], all_keywords)
     combined_density = (combined_occurrences / word_count) if word_count else 0.0
     
     results.append(SeoCheckResult(

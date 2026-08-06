@@ -16,6 +16,42 @@ MIN_KEYWORD_OCCURRENCES = 3
 KEYWORD_DENSITY_MAX = 0.025
 
 
+def count_keyword_occurrences(segments: list[str], keywords: list[str]) -> int:
+    """
+    Counts how many times ANY of `keywords` appears across `segments`, counting
+    each stretch of text ONCE.
+
+    WHY THIS IS NOT `sum(text.count(k) for k in keywords)`
+    -----------------------------------------------------
+    Our keyword sets overlap heavily by construction: the primary is
+    "WestPoint Pakistan WF-6807", the secondary is "WF-6807 Hair Straightener",
+    and the LSI keywords are phrases like "ceramic hair straightener". The words
+    "hair straightener" sit inside four of the five, so per-keyword counting
+    charges the same words several times over.
+
+    Measured on the real WF-6807 copy: per-keyword counting reported 8
+    occurrences where only 5 stretches of text exist -- a 60% overstatement.
+    That inflation is not cosmetic: it feeds the density check, so genuinely
+    clean copy is failed as keyword stuffing, the Writer is asked to fix a
+    problem it does not have, and the product can burn all three attempts and
+    land in Manual Review.
+
+    Longest-first alternation is what makes the count non-overlapping: the regex
+    engine prefers the longest branch at each position, so a match of
+    "WestPoint Pakistan WF-6807" consumes those words and the shorter keywords
+    inside it cannot match them again.
+    """
+    real = [k.strip() for k in keywords if k and k.strip()]
+    if not real:
+        return 0
+    # Longest first -- alternation is first-match-wins, not longest-match-wins.
+    pattern = re.compile(
+        "|".join(re.escape(k) for k in sorted(set(real), key=len, reverse=True)),
+        re.IGNORECASE,
+    )
+    return sum(len(pattern.findall(segment or "")) for segment in segments)
+
+
 def enforce_keyword_density(
     writer_output: WriterOutput,
     focus_keyword: str,
@@ -68,13 +104,8 @@ def enforce_keyword_density(
     all_keywords.sort(key=len, reverse=True)
 
     for kw in all_keywords:
-        # Check combined density on this iteration
-        combined_occurrences = sum(
-            sum(s.lower().count(k) for k in all_keywords) for s in [
-                wo.hero_heading, wo.hero_paragraph, *wo.feature_texts, *wo.features_bullets, *[f.answer for f in wo.faqs]
-            ]
-        )
-        
+        combined_occurrences = count_keyword_occurrences(segments, all_keywords)
+
         if combined_occurrences <= ceiling:
             break
 
