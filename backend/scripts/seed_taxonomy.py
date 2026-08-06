@@ -96,7 +96,8 @@ HOME_APPLIANCE_CHILDREN = [
 ]
 
 KITCHEN_APPLIANCE_CHILDREN = [
-    "Air Fryer", "Blender", "Coffee Maker", "Electric Kettle", "Hotplate", "Oven Toaster",
+    "Air Fryer", "Blender", "Chopper", "Coffee Maker", "Electric Kettle", "Hotplate", 
+    "Manual Chopper", "Oven Toaster",
 ]
 
 # --- Category spec schemas -------------------------------------------------
@@ -185,6 +186,16 @@ SPEC_SCHEMAS = {
     "Coffee Maker": _spec(
         ("coffee_maker_type", "Type", True), ("capacity", "Capacity", True),
         ("wattage", "Wattage", False), ("features", "Features", False),
+    ),
+    "Chopper": _spec(
+        ("appliance_type", "Chopper Type", True), ("wattage", "Wattage", True),
+        ("bowl_capacity", "Bowl Capacity", False), ("blades", "Blades", False),
+        ("speeds", "Speeds", False), ("features", "Features", False),
+    ),
+    "Manual Chopper": _spec(
+        ("appliance_type", "Type", True), ("material", "Material / Construction", False),
+        ("blades", "Blades & Attachments", False), ("capacity", "Capacity", False),
+        ("operation_mode", "Speed Control & Modes", False), ("features", "Features", False),
     ),
     "Electric Kettle": _spec(
         ("capacity", "Capacity", True), ("wattage", "Wattage", True),
@@ -394,6 +405,8 @@ async def seed_trusted_secondary_sources():
     defaults = [
         {"domain": "japanelectronics.pk", "label": "Japan Electronics", "priority": 1},
         {"domain": "surmawala.pk", "label": "Surmawala", "priority": 2},
+        {"domain": "pak-electronics.pk", "label": "Pak Electronics", "priority": 3},
+        {"domain": "kohinoorelectronics.pk", "label": "Kohinoor Electronics", "priority": 4},
     ]
     for source in defaults:
         await db.table("trusted_secondary_sources").upsert(

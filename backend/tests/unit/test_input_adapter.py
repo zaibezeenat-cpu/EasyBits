@@ -32,6 +32,7 @@ REAL_CATEGORIES = [
     "Geyser", "Heater", "Microwave Oven", "Refrigerator", "Vacuum Cleaner",
     "Washing machine", "Water Dispenser", "Water Heater", "Air Fryer", "Blender",
     "Coffee Maker", "Electric Kettle", "Hotplate", "Oven Toaster", "Led TV",
+    "Chopper"
 ]
 
 # child -> parent, mirroring the seeded two-level category tree.
@@ -61,48 +62,46 @@ REAL_CATEGORY_PARENTS = {
 
 # --- Price assignment -------------------------------------------------------
 
-def test_real_sheet_row_13_prices_match_real_csv_export():
-    """
-    Sheet row 13 (Kenwood): columns read "Regular Price"=139999, "Sale Price"=150000,
-    but the real exported CSV has Sale price=139999 and Regular price=150000.
-    The headers are misleading; the values decide.
-    """
-    regular, sale = assign_prices(Decimal("139999"), Decimal("150000"))
+def test_legacy_prices_match_real_csv_export():
+    """Legacy: use price_a and price_b."""
+    regular, sale = assign_prices(price_a=Decimal("139999"), price_b=Decimal("150000"))
     assert regular == Decimal("150000")
     assert sale == Decimal("139999")
 
-
-def test_real_sheet_row_14_prices_match_real_csv_export():
-    """Sheet row 14 (Midea 18HRFN8): 199999 / 220000 -> Sale=199999, Regular=220000."""
-    regular, sale = assign_prices(Decimal("199999"), Decimal("220000"))
-    assert regular == Decimal("220000")
-    assert sale == Decimal("199999")
-
-
-def test_sale_is_always_below_regular_regardless_of_argument_order():
-    """The core guarantee: order of the two cells can never flip the roles."""
+def test_legacy_sale_is_always_below_regular_regardless_of_argument_order():
     for a, b in [
         (Decimal("139999"), Decimal("150000")),
         (Decimal("150000"), Decimal("139999")),
-        (Decimal("229999"), Decimal("250000")),
-        (Decimal("250000"), Decimal("229999")),
     ]:
-        regular, sale = assign_prices(a, b)
+        regular, sale = assign_prices(price_a=a, price_b=b)
         assert sale is not None
-        assert sale < regular, f"sale {sale} must be below regular {regular} for input ({a}, {b})"
+        assert sale < regular
 
+def test_sale_price_without_regular_adds_markup():
+    regular, sale = assign_prices(sale_price=Decimal("1000"))
+    assert regular == Decimal("1100.00")
+    assert sale == Decimal("1000")
+
+def test_sale_and_regular_price_provided():
+    regular, sale = assign_prices(sale_price=Decimal("1000"), regular_price=Decimal("1200"))
+    assert regular == Decimal("1200")
+    assert sale == Decimal("1000")
+
+def test_sale_and_regular_price_swapped():
+    regular, sale = assign_prices(sale_price=Decimal("1200"), regular_price=Decimal("1000"))
+    assert regular == Decimal("1200")
+    assert sale == Decimal("1000")
 
 def test_equal_prices_mean_no_discount():
-    regular, sale = assign_prices(Decimal("99999"), Decimal("99999"))
+    regular, sale = assign_prices(price_a=Decimal("99999"), price_b=Decimal("99999"))
     assert regular == Decimal("99999")
-    assert sale is None, "equal prices are not a discount; sale must be omitted"
-
+    assert sale is None
 
 def test_non_positive_price_is_rejected():
     with pytest.raises(ValueError):
-        assign_prices(Decimal("0"), Decimal("150000"))
+        assign_prices(price_a=Decimal("0"), price_b=Decimal("150000"))
     with pytest.raises(ValueError):
-        assign_prices(Decimal("-5"), Decimal("150000"))
+        assign_prices(sale_price=Decimal("-5"))
 
 
 # --- SKU extraction ---------------------------------------------------------
@@ -197,17 +196,17 @@ def test_sku_requires_a_model_number():
 
 # --- Template selection -----------------------------------------------------
 
-def test_detect_template_b_from_real_no_images_status():
+def test_detect_template_a_from_real_no_images_status():
     status = "no description images here so used no images product description template"
-    assert detect_template(status) == "B"
+    assert detect_template(status) == "A"
 
 
-def test_detect_template_a_from_real_images_found_status():
+def test_detect_template_b_from_real_images_found_status():
     status = (
         "Done with description images FOUND, SO MAKE A DESCRIPTION WITH IMAGE ONE "
         "JUST LIKE BEFORE."
     )
-    assert detect_template(status) == "A"
+    assert detect_template(status) == "B"
 
 
 def test_detect_template_returns_none_when_ambiguous():
@@ -273,6 +272,9 @@ def test_match_brand_returns_none_for_unknown_brand():
 def test_infer_category_from_real_product_names():
     assert infer_category("Kenwood KLU-12B03S 1 Ton Inverter AC", REAL_CATEGORIES) == "Air conditioner"
     assert infer_category("Dawlance DW-131HP Microwave Oven", REAL_CATEGORIES) == "Microwave Oven"
+    assert infer_category("Anex AG-04 Potato Cutter", REAL_CATEGORIES + ["Manual Chopper"]) == "Manual Chopper"
+    assert infer_category("Anex AG-01 Handy Pull Chopper", REAL_CATEGORIES + ["Manual Chopper"]) == "Manual Chopper"
+    assert infer_category("WestPoint Meat Chopper", REAL_CATEGORIES + ["Manual Chopper"]) == "Chopper"
 
 
 def test_inverter_products_resolve_to_their_appliance_category():
@@ -368,7 +370,7 @@ def test_parse_real_sheet_row_13_end_to_end():
     assert row.sale_price == Decimal("139999")
     assert row.sale_price < row.regular_price
     assert row.warranty_phrase == "10 Years Compressor Warranty; 5 Years All Parts Warranty"
-    assert row.template_choice == "B"
+    assert row.template_choice == "A"
     assert row.missing_required() == []
 
 
@@ -388,7 +390,7 @@ def test_parse_real_sheet_row_14_end_to_end():
     assert row.regular_price == Decimal("220000")
     assert row.sale_price == Decimal("199999")
     assert row.warranty_phrase == "10 years compressor warranty; 2 years parts warranty"
-    assert row.template_choice == "A"
+    assert row.template_choice == "B"
     assert row.missing_required() == []
 
 

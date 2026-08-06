@@ -21,7 +21,6 @@ through to the next tier, never a crash).
 import re
 
 import httpx
-
 from app.core.config import settings
 from app.core.logging import logger
 

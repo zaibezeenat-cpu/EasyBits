@@ -1,14 +1,15 @@
 from datetime import datetime, timezone
 from uuid import UUID
-from typing import List
+
 from app.db.repositories.base import BaseRepository
 from app.models.product import Product
+
 
 class ProductsRepository(BaseRepository[Product]):
     def __init__(self):
         super().__init__(model=Product, table_name="products")
 
-    async def get_by_batch(self, batch_id: UUID) -> List[Product]:
+    async def get_by_batch(self, batch_id: UUID) -> list[Product]:
         return await self.list(filters={"batch_id": str(batch_id)})
 
     async def update_product(self, product_id: UUID, data: dict) -> Product:

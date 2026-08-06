@@ -26,7 +26,10 @@ def render_specs_table(extraction: ExtractionResult, schema: CategorySpecSchema,
     ]
 
     for field in schema.fields:
-        value = extraction.confirmed_value(field.key) or "Not Available"
+        value = extraction.confirmed_value(field.key)
+        if not value or str(value).strip().upper() == "UNKNOWN" or str(value).strip().upper() == "NOT AVAILABLE":
+            continue
+            
         html.append(_ROW)
         html.append(f"      <th style='{_TH}'>{field.label}</th>")
         html.append(f"      <td style='{_TD}'>{value}</td>")

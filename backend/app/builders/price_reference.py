@@ -1,7 +1,7 @@
 from decimal import Decimal
-from typing import Optional
 
-def compute_price_discrepancy(scraped_price: Optional[float], input_price: Optional[Decimal]) -> Optional[float]:
+
+def compute_price_discrepancy(scraped_price: float | None, input_price: Decimal | None) -> float | None:
     """
     Computes percentage difference between official and input price (Phase 2 §6).
     """
@@ -12,7 +12,7 @@ def compute_price_discrepancy(scraped_price: Optional[float], input_price: Optio
     pct = (diff / input_price) * 100
     return float(pct)
 
-def get_price_warning(discrepancy_pct: Optional[float]) -> Optional[str]:
+def get_price_warning(discrepancy_pct: float | None) -> str | None:
     if discrepancy_pct and discrepancy_pct > 15.0:
         return f"Warning: Price discrepancy is {discrepancy_pct:.1f}% (>15%)"
     return None

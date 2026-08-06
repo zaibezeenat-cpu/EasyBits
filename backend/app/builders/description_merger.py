@@ -165,6 +165,10 @@ _TB_SUMMARY = ("font-size: 15px; color: #561491; font-family: var(--wd-title-fon
                "font-weight: 600; outline: none; margin: 0;")
 _TB_FAQ_A = ("margin-top: 12px; margin-bottom: 0; color: #444; font-size: 14px; "
              "border-top: 1px dashed #eae2f8; padding-top: 12px;")
+_TB_WHY_BUY_BOX = ("background: #fffdf5; border: 1px solid #fce8b3; border-radius: 12px; "
+                   "padding: 20px 25px; margin: 25px 0;")
+_TB_WHY_BUY_H3 = "color: #f7a800; margin-top: 0; margin-bottom: 12px; font-size: 18px;"
+_TB_WHY_BUY_P = "margin: 0; line-height: 1.7; font-size: 14px;"
 
 
 def _tb_bullet(bullet: str) -> str:
@@ -183,7 +187,7 @@ def _tb_bullet(bullet: str) -> str:
 
 
 def render_template_b(writer_output: WriterOutput, product_name: str,
-                      focus_keyword: str = "") -> str:
+                      focus_keyword: str = "", brand_name: str = "") -> str:
     """Render the no-image description in the store's theme (see module note)."""
     wo = writer_output
     fk = (focus_keyword or "").strip().lower()
@@ -210,6 +214,15 @@ def render_template_b(writer_output: WriterOutput, product_name: str,
         f"<div style='{_TB_BOX}'>"
         f"<h3 style='{_TB_BOX_H3}'>Key Specifications &amp; Benefits</h3>"
         f"<ul style='{_TB_UL}'>{bullets}</ul></div>"
+    )
+
+    brand_label = f"official {brand_name.strip()} warranty" if brand_name and brand_name.strip() else "official brand warranty"
+    parts.append(
+        f"<div style='{_TB_WHY_BUY_BOX}'>"
+        f"<h3 style='{_TB_WHY_BUY_H3}'>🛒 Why Buy from Kiachahiye?</h3>"
+        f"<p style='{_TB_WHY_BUY_P}'>Get the unit at the best price in Pakistan with <strong>{brand_label}</strong>, "
+        f"<strong>genuine product guarantee</strong>, and <strong>open parcel then pay</strong>. "
+        f"Upgrade your home appliance setup today!</p></div>"
     )
 
     faq_items = "".join(

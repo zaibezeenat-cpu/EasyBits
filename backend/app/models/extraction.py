@@ -1,6 +1,7 @@
-from pydantic import BaseModel, model_validator
 from datetime import datetime
-from typing import Literal, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
+
+from pydantic import BaseModel, model_validator
 
 if TYPE_CHECKING:
     from app.models.taxonomy import CategorySpecSchema
@@ -13,7 +14,7 @@ Confidence = Literal["confirmed", "conflicting", "unreachable"]
 class SourceCitation(BaseModel):
     field_name: str                    # matches SpecField.key
     value: str                         # literal "UNKNOWN" allowed
-    source_url: Optional[str] = None   # None only when confidence == "unreachable"
+    source_url: str | None = None   # None only when confidence == "unreachable"
     source_type: SourceType
     confidence: Confidence
     fetched_at: datetime
@@ -34,7 +35,7 @@ class ExtractionResult(BaseModel):
     # validator rejects outright ("is not valid 'regex'"), breaking the
     # Extractor's Groq fallback path every time it's needed. Never consumed as
     # a Decimal anywhere downstream, so float is strictly safer here.
-    scraped_official_price: Optional[float] = None
+    scraped_official_price: float | None = None
 
     def resolve(self, field_name: str):
         """
@@ -46,7 +47,7 @@ class ExtractionResult(BaseModel):
         from app.builders.fact_corroboration import resolve_field
         return resolve_field(field_name, self.citations)
 
-    def confirmed_value(self, field_name: str) -> Optional[str]:
+    def confirmed_value(self, field_name: str) -> str | None:
         """
         The value to use downstream, resolved across ALL sources.
 
@@ -63,14 +64,15 @@ class ExtractionResult(BaseModel):
         r = self.resolve(field_name)
         return r.value if r.is_confirmed else None
 
-    def single_source_value(self, field_name: str) -> Optional[str]:
-        """The value when it rests on exactly one unverified source, else None.
-
-        Used only to explain an escalation ("known from one source but not
-        corroborated"), never to publish.
-        """
+    def single_source_value(self, field_name: str) -> str | None:
+        """The value when it rests on exactly one unverified source, else None."""
         r = self.resolve(field_name)
         return r.value if r.status == "single_source" else None
+
+    def single_source_type(self, field_name: str) -> str | None:
+        """The source_type when the field has a single unverified source, else None."""
+        r = self.resolve(field_name)
+        return r.source_type if r.status == "single_source" else None
 
     def has_conflict(self, field_name: str) -> bool:
         """
@@ -85,22 +87,34 @@ class ExtractionResult(BaseModel):
     def uncorroborated_required_fields(self, schema: "CategorySpecSchema") -> dict[str, str]:
         """
         Required fields that are NOT safe to publish, mapped to why:
-        "single_source" (one unverified source) or "conflict" (sources disagree).
+        "conflict" (sources disagree) or "single_source" from a retailer (non-official).
         Distinct from `missing_required_fields` (no source states them at all),
         so the review queue can show the real reason.
         """
         issues: dict[str, str] = {}
         for f in schema.fields:
-            if not f.required:
+            if not f.required or f.key in ("brand", "model_number", "appliance_type"):
                 continue
-            status = self.resolve(f.key).status
-            if status in ("single_source", "conflict"):
-                issues[f.key] = status
+            res = self.resolve(f.key)
+            if res.status == "conflict":
+                issues[f.key] = res.status
+            elif res.status == "single_source" and res.source_type != "official":
+                # Single source from retailer is not trustworthy
+                issues[f.key] = res.status
         return issues
 
     def missing_required_fields(self, schema: "CategorySpecSchema") -> list[str]:
-        return [f.key for f in schema.fields if f.required and self.confirmed_value(f.key) is None
-                and not self.has_conflict(f.key)]
+        return [
+            f.key
+            for f in schema.fields
+            if f.required and f.key not in ("brand", "model_number", "appliance_type")
+            and self.confirmed_value(f.key) is None
+            and not self.has_conflict(f.key)
+            and (
+                self.single_source_value(f.key) is None
+                or self.single_source_type(f.key) == "official"
+            )
+        ]
 
     def conflicting_fields(self, schema: "CategorySpecSchema") -> list[str]:
         return [f.key for f in schema.fields if self.has_conflict(f.key)]

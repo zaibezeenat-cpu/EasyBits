@@ -193,7 +193,7 @@ async def _fetch_with_curl(url: str, model_number: str = "") -> ScrapeResult | N
     )
 
 
-async def smart_fetch(url: str, model_number: str = "") -> ScrapeResult:
+async def smart_fetch(url: str, model_number: str = "", allow_tier2: bool = True) -> ScrapeResult:
     """Fetch a URL with the cheapest engine that works (Tier 1 -> Tier 2).
 
     The caller (orchestrator) still applies its own block/mention/follow logic on
@@ -213,8 +213,9 @@ async def smart_fetch(url: str, model_number: str = "") -> ScrapeResult:
     # `tier1 is not None` is implied by decision.usable, but tested explicitly
     # rather than asserted: `python -O` strips asserts, and the failure mode
     # would be an AttributeError deep in the caller instead of a clean fallback.
-    if decision.usable and tier1 is not None:
-        logger.debug(f"Tier 1 (curl_cffi) served {url} [{decision.reason}] in {tier1_ms}ms")
+    if (decision.usable or not allow_tier2) and tier1 is not None:
+        logger.debug(f"Tier 1 (curl_cffi) served {url} [{decision.reason}] in {tier1_ms}ms" + 
+                     (" (Tier 2 disabled)" if not decision.usable else ""))
         tier1.metadata = {
             **tier1.metadata,
             "fetch_tier": 1,

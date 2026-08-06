@@ -1,13 +1,13 @@
+
 from app.db.repositories.base import BaseRepository
 from app.models.taxonomy import Category
 
-from typing import Optional
 
 class CategoriesRepository(BaseRepository[Category]):
     def __init__(self):
         super().__init__(model=Category, table_name="categories")
 
-    async def get_by_name(self, name: str) -> Optional[Category]:
+    async def get_by_name(self, name: str) -> Category | None:
         results = await self.list(filters={"name": name})
         return results[0] if results else None
 

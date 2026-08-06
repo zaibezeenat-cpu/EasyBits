@@ -9,9 +9,8 @@ Manual Review rather than into a wrong (or invented) WooCommerce category.
 """
 import logging
 
-from pydantic import BaseModel
-
 from app.core.llm_provider import llm_provider
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 

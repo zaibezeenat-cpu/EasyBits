@@ -1,10 +1,11 @@
 import csv
 import io
-from typing import List, Dict, Any
-from app.graph.state import PipelineState
+from typing import Any
+
 from app.builders.html_sanitizer import strip_newlines_for_csv
 from app.builders.internal_links import build_canonical_url, build_product_slug
 from app.builders.seo_title_builder import build_focus_keyword_field
+from app.graph.state import PipelineState
 
 COLUMN_ORDER = [
     "ID", "Type", "SKU", "Name", "slug", "Published", "Is featured?", "Visibility in catalog",
@@ -57,7 +58,7 @@ def assemble_csv_row(
     brand_name: str,
     canonical_brand_name: str | None = None,
     canonical_category_path: str | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Maps PipelineState to the 49-column WooCommerce CSV format.
 
@@ -161,7 +162,7 @@ def assemble_csv_row(
         "Categories": category_path,
         "Tags": state.tags or f"{brand_name}, {p.category_name}, HW",
         "Shipping class": "",
-        "Images": "",
+        "Images": p.user_overrides.get("Images") or p.user_overrides.get("Image_URLs") or "",
         "Download limit": "0",
         "Download expiry days": "0",
         "Parent": "",
@@ -196,9 +197,23 @@ def assemble_csv_row(
         "Meta: rank_math_canonical_url": canonical_url,
     }
 
-    return row
+    # Apply adaptive user overrides (Rank Math SEO overrides, extra Woo columns, etc.)
+    # This guarantees manual spreadsheet entries ALWAYS win over the AI.
+    if state.raw_input and hasattr(state.raw_input, "user_overrides"):
+        row.update(state.raw_input.user_overrides)
 
-def generate_csv_file(rows: List[Dict[str, Any]]) -> str:
+    # Sanitize every string cell to eliminate literal line-breaks (\n, \r) and tab indentations (\t),
+    # ensuring WooCommerce CSV importer parses every row cleanly without line-split errors.
+    sanitized_row = {}
+    for k, v in row.items():
+        if isinstance(v, str):
+            sanitized_row[k] = strip_newlines_for_csv(v)
+        else:
+            sanitized_row[k] = v
+
+    return sanitized_row
+
+def generate_csv_file(rows: list[dict[str, Any]]) -> str:
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=COLUMN_ORDER, quoting=csv.QUOTE_ALL)
     writer.writeheader()

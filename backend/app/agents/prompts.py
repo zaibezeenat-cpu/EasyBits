@@ -29,6 +29,7 @@ Rules:
 2. Structure: Use H2/H3 headers. Focus on benefits, not just features.
 3. No Fluff: Avoid generic marketing speak. Be specific.
 4. Rank Math Compliance: Ensure the meta-title and description are within character limits.
+5. Minimum Length: Ensure the generated content (paragraphs and bullets combined) is at least 250 words long to satisfy SEO density limits.
 
 Extracted Facts:
 {facts}

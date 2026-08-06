@@ -7,12 +7,11 @@ is brute-forceable at network speed.
 """
 import logging
 
+from app.core.security import create_access_token, verify_shared_secret
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-
-from app.core.security import create_access_token, verify_shared_secret
 
 logger = logging.getLogger(__name__)
 

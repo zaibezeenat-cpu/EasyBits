@@ -1,5 +1,6 @@
 from pydantic import BaseModel, field_validator
 
+
 class FAQPair(BaseModel):
     question: str
     answer: str
@@ -41,12 +42,9 @@ class WriterOutput(BaseModel):
     @field_validator("lsi_keywords")
     @classmethod
     def lsi_keyword_count_in_range(cls, v: list[str]) -> list[str]:
-        # Exactly 2-3 LSI keywords. The exported rank_math_focus_keyword field is
-        # "Primary + Secondary + these LSIs", so this lands at 4-5 keywords total.
-        # Rank Math scores exactly the first 5 keywords, which is the perfect
-        # sweet spot. Going higher pushes the density over 2.5% mathematically.
-        if not (2 <= len(v) <= 3):
-            raise ValueError(f"WriterOutput.lsi_keywords must have 2 to 3 entries, got {len(v)}")
+        # Up to 5 customer-search LSI keywords. Rank Math scores all focus/secondary keywords.
+        if not (2 <= len(v) <= 5):
+            raise ValueError(f"WriterOutput.lsi_keywords must have 2 to 5 entries, got {len(v)}")
         if any(not k.strip() for k in v):
             raise ValueError("WriterOutput.lsi_keywords entries must not be empty")
         if len(set(k.strip().lower() for k in v)) != len(v):

@@ -1,12 +1,13 @@
+
 from pydantic import BaseModel
-from typing import Optional
+
 
 class ScrapeResult(BaseModel):
     url: str
     content: str  # cleaned plain text, ready for an LLM prompt
     engine_used: str  # "firecrawl" or "playwright"
     success: bool
-    error_message: Optional[str] = None
+    error_message: str | None = None
     metadata: dict = {}
     # Product-detail links found on the page. A search-results page proves the
     # product exists but rarely carries its specs, so the orchestrator follows

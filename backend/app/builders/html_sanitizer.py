@@ -12,7 +12,7 @@ def sanitize_html_fields(data: dict) -> dict:
     """
     fields_to_sanitize = ["short_description", "description", "specs_table_html"]
     for field in fields_to_sanitize:
-        if field in data and data[field]:
+        if data.get(field):
             data[field] = html.escape(data[field])
     return data
 

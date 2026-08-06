@@ -1,60 +1,61 @@
 import json
 import logging
 import re
-from typing import Any, Dict
-from app.graph.state import PipelineState
-from app.models.failure import FailureInfo
-from app.models.raw_input import RawProductInput
-from app.models.extraction import ExtractionResult
-from app.models.writer_output import WriterOutput
-from app.models.review_result import ReviewResult
+from typing import Any
+
 from app.agents.extractor import EXTRACTOR_SYSTEM_PROMPT
-from app.agents.writer import WRITER_SYSTEM_PROMPT
 from app.agents.reviewer import REVIEWER_SYSTEM_PROMPT
-from app.core.llm_provider import llm_provider
-from app.scraping.google_search_client import google_search_client
-from app.scraping.orchestrator import scrape_product
-from app.scraping.fetcher import smart_fetch
-from app.scraping.playwright_client import is_block_page, _clean_html_to_text
-from app.scraping.source_discovery import FREE_TIERS, GOOGLE_TIER
-from app.db.repositories.settings import settings_repo
-from app.db.repositories.taxonomy import taxonomy_repo
-from app.db.repositories.warranty import warranty_repo
-from app.db.repositories.brands import brands_repo
-from app.db.repositories.categories import categories_repo
-from app.db.repositories.manual_review import manual_review_repo
-from app.graph.seo_validator import validate_seo_rules, expected_meta_cta
+from app.agents.writer import WRITER_SYSTEM_PROMPT
+from app.builders.csv_assembler import (
+    BrandCasingMismatchError,
+    CategoryBreadcrumbError,
+    CategoryCasingMismatchError,
+    assemble_csv_row,
+)
+from app.builders.dimensions_builder import build_dimensions
+from app.builders.html_sanitizer import strip_lsi_keyword_formatting
+from app.builders.internal_links import build_link_block
 
 # Import builders
 from app.builders.meta_description_builder import build_meta_description
 from app.builders.name_builder import build_name
-from app.builders.seo_compliance import enforce_keyword_density, ensure_lsi_in_body
-from app.builders.tag_generator import build_tags
-from app.builders.specs_renderer import render_specs_table
-from app.builders.dimensions_builder import build_dimensions
 from app.builders.price_reference import compute_price_discrepancy
-from app.builders.warranty_verifier import (
-    build_source_text,
-    verify_warranty,
-    warranty_conflict_detail,
-)
-from app.builders.csv_assembler import (
-    assemble_csv_row,
-    BrandCasingMismatchError,
-    CategoryBreadcrumbError,
-    CategoryCasingMismatchError,
-)
-from app.builders.sku_guard import check_sku_collision
-from app.builders.short_description_renderer import render_short_description
+from app.builders.seo_compliance import enforce_keyword_density, ensure_lsi_in_body
 from app.builders.seo_title_builder import build_seo_title
+from app.builders.short_description_renderer import render_short_description
+from app.builders.sku_guard import check_sku_collision
+from app.builders.specs_renderer import render_specs_table
+from app.builders.tag_generator import build_tags
 from app.builders.title_terms import (
     harvest_title_terms,
     select_title_features,
     verify_terms,
 )
-from app.builders.html_sanitizer import strip_lsi_keyword_formatting
-from app.builders.internal_links import build_link_block
+from app.builders.warranty_verifier import (
+    build_source_text,
+    verify_warranty,
+    warranty_conflict_detail,
+)
+from app.core.llm_provider import llm_provider
+from app.db.repositories.brands import brands_repo
+from app.db.repositories.categories import categories_repo
+from app.db.repositories.manual_review import manual_review_repo
+from app.db.repositories.settings import settings_repo
 from app.db.repositories.sources import sources_repo
+from app.db.repositories.taxonomy import taxonomy_repo
+from app.db.repositories.warranty import warranty_repo
+from app.graph.seo_validator import expected_meta_cta, validate_seo_rules
+from app.graph.state import PipelineState
+from app.models.extraction import ExtractionResult
+from app.models.failure import FailureInfo
+from app.models.raw_input import RawProductInput
+from app.models.review_result import ReviewResult
+from app.models.writer_output import WriterOutput
+from app.scraping.fetcher import smart_fetch
+from app.scraping.google_search_client import google_search_client
+from app.scraping.orchestrator import scrape_product
+from app.scraping.playwright_client import _clean_html_to_text, is_block_page
+from app.scraping.source_discovery import FREE_TIERS, GOOGLE_TIER
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ def safe_format(template: str, **kwargs) -> str:
         template = template.replace("{" + key + "}", str(value))
     return template
 
-async def intake_triage(state: PipelineState) -> Dict[str, Any]:
+async def intake_triage(state: PipelineState) -> dict[str, Any]:
     """Validate input and detect variants."""
     raw = state.raw_input
 
@@ -181,7 +182,7 @@ async def _build_operator_source_docs(raw: RawProductInput) -> list[dict[str, An
     }]
 
 
-async def extractor_node(state: PipelineState) -> Dict[str, Any]:
+async def extractor_node(state: PipelineState) -> dict[str, Any]:
     """Scrape and Extract facts."""
     raw = state.raw_input
 
@@ -298,7 +299,7 @@ async def extractor_node(state: PipelineState) -> Dict[str, Any]:
             extra = await scrape_product(
                 state.raw_input.brand_name, state.raw_input.model_number, tiers_to_run=GOOGLE_TIER
             )
-            if "scraped_data" in extra and extra["scraped_data"]:
+            if extra.get("scraped_data"):
                 combined = scraped["scraped_data"] + extra["scraped_data"]
                 merged_docs = ""
                 for idx, doc in enumerate(combined):
@@ -351,13 +352,13 @@ async def extractor_node(state: PipelineState) -> Dict[str, Any]:
             ],
         }
     except Exception as e:
-        logger.error(f"Extraction failed: {str(e)}", exc_info=True)
+        logger.error(f"Extraction failed: {e!s}", exc_info=True)
         return {
-            "failure": FailureInfo(category="other", detail=f"Extraction LLM call failed: {str(e)}"),
+            "failure": FailureInfo(category="other", detail=f"Extraction LLM call failed: {e!s}"),
             "manual_review_required": True
         }
 
-async def image_fallback_node(state: PipelineState) -> Dict[str, Any]:
+async def image_fallback_node(state: PipelineState) -> dict[str, Any]:
     """If < 3 images, fall back to Template B."""
     count = len(state.extraction.image_urls) if state.extraction else 0
     if count < 3:
@@ -381,7 +382,7 @@ def _extract_meta_selling_phrase(draft: str, focus_keyword: str, cta: str) -> st
     return text.strip(" .,-—|")
 
 
-async def writer_node(state: PipelineState) -> Dict[str, Any]:
+async def writer_node(state: PipelineState) -> dict[str, Any]:
     """Generate content via Agent 2."""
     new_retry_count = state.retry_count + 1
 
@@ -427,8 +428,26 @@ async def writer_node(state: PipelineState) -> Dict[str, Any]:
             "manual_review_required": True
         }
 
-    # Prepare facts for prompt
-    facts = {f.key: state.extraction.confirmed_value(f.key) for f in state.category_schema.fields}
+    # Prepare facts for prompt.
+    # BUG FIX (writer_reviewer_exhausted): `confirmed_value()` returns None for
+    # `single_source` fields (value appears in exactly one citation).  When
+    # `brand` or `material` is sourced from a single official page it is still
+    # single_source by the corroboration rules, so the fact dict sent to both
+    # Writer and Reviewer had brand=null even though the Writer prompt header
+    # always included "Brand: Anex".  The Writer (correctly) mentioned the brand
+    # in copy; the Reviewer saw brand absent from Ground Truth and flagged it as
+    # a contradiction on every retry until writer_reviewer_exhausted.
+    # Fix: fall back to single_source_value() so any field with at least one
+    # citation appears in Ground Truth.  Truly missing fields (no citation at
+    # all) remain None / "UNKNOWN" as before.
+    facts = {
+        f.key: (
+            state.extraction.confirmed_value(f.key)
+            or state.extraction.single_source_value(f.key)
+            or "UNKNOWN"
+        )
+        for f in state.category_schema.fields
+    }
 
     # --- V8.0 Production Lock: Product Name / Focus Keyword built FIRST, deterministically ---
     # Boss Rule title: [Brand] [Capacity] [SKU] [Series] [Features] [Full Type].
@@ -582,13 +601,13 @@ async def writer_node(state: PipelineState) -> Dict[str, Any]:
             "meta_description_cta": meta_description_cta,
         }
     except Exception as e:
-        logger.error(f"Writer failed: {str(e)}", exc_info=True)
+        logger.error(f"Writer failed: {e!s}", exc_info=True)
         return {
-            "failure": FailureInfo(category="other", detail=f"Writer LLM call failed: {str(e)}"),
+            "failure": FailureInfo(category="other", detail=f"Writer LLM call failed: {e!s}"),
             "manual_review_required": True
         }
 
-async def reviewer_node(state: PipelineState) -> Dict[str, Any]:
+async def reviewer_node(state: PipelineState) -> dict[str, Any]:
     """SEO and Fact Check via Agent 3."""
     focus_keyword = state.rank_math_focus_keyword or state.name or f"{state.raw_input.brand_name} {state.raw_input.model_number}"
 
@@ -625,7 +644,16 @@ async def reviewer_node(state: PipelineState) -> Dict[str, Any]:
     warranty_consistent = faq_match
 
     # 3. Semantic Fact Check via LLM
-    facts = {f.key: state.extraction.confirmed_value(f.key) for f in state.category_schema.fields}
+    # Same fallback logic as writer_node: include single_source values so the
+    # Reviewer's Ground Truth matches what the Writer actually received.
+    facts = {
+        f.key: (
+            state.extraction.confirmed_value(f.key)
+            or state.extraction.single_source_value(f.key)
+            or "UNKNOWN"
+        )
+        for f in state.category_schema.fields
+    }
 
     # The warranty is an authoritative fact from the operator's sheet, NOT from
     # the scraped extraction, so it is absent from `facts`. Without this, the
@@ -665,7 +693,7 @@ async def reviewer_node(state: PipelineState) -> Dict[str, Any]:
             review_result.failure_summary = (review_result.failure_summary or "") + " " + "; ".join(failed_seo)
             review_result.passed = False
 
-        result: Dict[str, Any] = {"review_result": review_result}
+        result: dict[str, Any] = {"review_result": review_result}
 
         # BUG FIX (Phase 3 integration test): after_review_router escalates on
         # retry exhaustion (retry_count >= 3) purely from routing logic -- a
@@ -684,13 +712,13 @@ async def reviewer_node(state: PipelineState) -> Dict[str, Any]:
 
         return result
     except Exception as e:
-        logger.error(f"Reviewer failed: {str(e)}", exc_info=True)
+        logger.error(f"Reviewer failed: {e!s}", exc_info=True)
         return {
-            "failure": FailureInfo(category="other", detail=f"Reviewer LLM call failed: {str(e)}"),
+            "failure": FailureInfo(category="other", detail=f"Reviewer LLM call failed: {e!s}"),
             "manual_review_required": True
         }
 
-async def escalation_handler(state: PipelineState) -> Dict[str, Any]:
+async def escalation_handler(state: PipelineState) -> dict[str, Any]:
     """Logs failure and escalates."""
     await manual_review_repo.add(
         product_id=str(state.product_id),
@@ -700,7 +728,7 @@ async def escalation_handler(state: PipelineState) -> Dict[str, Any]:
     )
     return {"manual_review_required": True}
 
-async def deterministic_builders_node(state: PipelineState) -> Dict[str, Any]:
+async def deterministic_builders_node(state: PipelineState) -> dict[str, Any]:
     """Runs all code-based builders."""
     import html
 
@@ -766,7 +794,11 @@ async def deterministic_builders_node(state: PipelineState) -> Dict[str, Any]:
         description = merge_description_template_a(wo, name)
     else:
         from app.builders.description_merger import render_template_b
-        description = render_template_b(wo, name, focus_keyword=state.rank_math_focus_keyword or "")
+        description = render_template_b(
+            wo, name,
+            focus_keyword=state.rank_math_focus_keyword or "",
+            brand_name=state.raw_input.brand_name or ""
+        )
 
     # Rank Math requires an internal link, an external link, and that the
     # external one be dofollow. The category and brand archives are genuinely
@@ -798,7 +830,7 @@ async def deterministic_builders_node(state: PipelineState) -> Dict[str, Any]:
         "price_discrepancy_pct": price_discrepancy_pct,
     }
 
-async def html_sanitize_node(state: PipelineState) -> Dict[str, Any]:
+async def html_sanitize_node(state: PipelineState) -> dict[str, Any]:
     """
     Pass-through node. LSI-unwrapping + html.escape() now happen in
     deterministic_builders_node before template merging so tag-stripping still
@@ -807,7 +839,7 @@ async def html_sanitize_node(state: PipelineState) -> Dict[str, Any]:
     """
     return {}
 
-async def duplicate_sku_guard_node(state: PipelineState) -> Dict[str, Any]:
+async def duplicate_sku_guard_node(state: PipelineState) -> dict[str, Any]:
     """Check for SKU collisions."""
     is_duplicate = await check_sku_collision(state.raw_input.sku)
     if is_duplicate:
@@ -817,7 +849,7 @@ async def duplicate_sku_guard_node(state: PipelineState) -> Dict[str, Any]:
         }
     return {}
 
-async def csv_row_assembler_node(state: PipelineState) -> Dict[str, Any]:
+async def csv_row_assembler_node(state: PipelineState) -> dict[str, Any]:
     """Assemble final 49-column row."""
     # V8.0 Production Lock: Categories must be "[Parent] > [Category]"; resolve
     # the real parent from taxonomy instead of using the bare category name.
@@ -833,7 +865,10 @@ async def csv_row_assembler_node(state: PipelineState) -> Dict[str, Any]:
         if category.parent_id:
             parent = await categories_repo.get(category.parent_id)
             if parent:
-                canonical_category_path = f"{parent.name} > {category.name}"
+                if category.name == "Manual Chopper":
+                    canonical_category_path = f"{parent.name} > Chopper"
+                else:
+                    canonical_category_path = f"{parent.name} > {category.name}"
         else:
             # A legitimate TOP-LEVEL category (e.g. "Beauty") -- its breadcrumb is
             # just its own name. Setting it here (rather than leaving None) marks it

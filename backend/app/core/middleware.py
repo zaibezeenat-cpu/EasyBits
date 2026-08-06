@@ -9,11 +9,10 @@ import time
 import uuid
 from contextvars import ContextVar
 
+from app.core.security import PUBLIC_PATHS, decode_token
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-
-from app.core.security import PUBLIC_PATHS, decode_token
 
 logger = logging.getLogger(__name__)
 

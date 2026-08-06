@@ -1,5 +1,6 @@
-from supabase import acreate_client, AsyncClient
 from app.core.config import settings
+
+from supabase import AsyncClient, acreate_client
 
 _client: AsyncClient | None = None
 

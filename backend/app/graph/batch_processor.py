@@ -2,14 +2,15 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from uuid import UUID
+
+from app.core.budget_guard import check_budget_ok
+from app.core.config import settings
+from app.db.repositories.batches import batches_repo
+from app.db.repositories.products import products_repo
 from app.graph.pipeline import pipeline
 from app.graph.state import PipelineState
-from app.core.config import settings
-from app.core.budget_guard import check_budget_ok
 from app.scraping.playwright_client import shutdown_browser
 from app.sse import sse_manager
-from app.db.repositories.products import products_repo
-from app.db.repositories.batches import batches_repo
 
 logger = logging.getLogger(__name__)
 

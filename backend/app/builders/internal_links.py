@@ -17,7 +17,6 @@ URL patterns are the live site's, confirmed by the owner:
     https://kiachahiye.com/brand/anex/
 """
 import re
-from typing import Optional
 
 SITE_BASE_URL = "https://kiachahiye.com"
 
@@ -47,12 +46,16 @@ def slugify(value: str) -> str:
     return slug
 
 
-def category_url(category_name: str, parent_name: Optional[str] = None) -> Optional[str]:
+def category_url(category_name: str, parent_name: str | None = None) -> str | None:
     """
     Category archive URL. Sub-categories nest under their parent, matching the
     live site: a child without its parent would 404, so a category with no
     parent is treated as top-level rather than guessed at.
     """
+    if (category_name or "").strip().lower() == "manual chopper":
+        category_name = "Chopper"
+        if not parent_name:
+            parent_name = "Kitchen Appliances"
     child = slugify(category_name)
     if not child:
         return None
@@ -62,14 +65,14 @@ def category_url(category_name: str, parent_name: Optional[str] = None) -> Optio
     return f"{SITE_BASE_URL}/product-category/{child}/"
 
 
-def brand_url(brand_name: str) -> Optional[str]:
+def brand_url(brand_name: str) -> str | None:
     """Brand archive URL, e.g. https://kiachahiye.com/brand/anex/"""
     slug = slugify(brand_name)
     return f"{SITE_BASE_URL}/brand/{slug}/" if slug else None
 
 
 def build_product_slug(
-    model_number: str, product_type: str, brand: str = "",
+    model_number: str, product_type: str | None = None, brand: str = "",
     max_url_length: int = MAX_URL_LENGTH,
 ) -> str:
     """
@@ -80,11 +83,21 @@ def build_product_slug(
     ("wf-6807-hair-straightener"). The model is never dropped; only trailing words
     are trimmed to fit the budget.
     """
+    pt = (product_type or "").strip()
+    if pt.lower() == "none":
+        pt = ""
+
+    parts = [model_number]
+    if pt:
+        parts.append(pt)
+    elif brand:
+        parts.insert(0, brand)
+
+    raw_slug_text = " ".join(parts).strip()
     base_len = len(SITE_BASE_URL) + len(PRODUCT_PATH) + 1  # +1 for the trailing "/"
     budget = max(len(slugify(model_number)) or 1, max_url_length - base_len)
 
-    slug = slugify(f"{model_number} {product_type}") or slugify(f"{brand} {model_number}") \
-        or slugify(model_number)
+    slug = slugify(raw_slug_text) or slugify(model_number)
     if len(slug) > budget:
         slug = slug[:budget].rstrip("-")
     return slug
@@ -112,8 +125,8 @@ def _anchor(url: str, text: str, dofollow: bool = True) -> str:
 def build_link_block(
     brand_name: str,
     category_name: str,
-    parent_category: Optional[str] = None,
-    official_brand_domain: Optional[str] = None,
+    parent_category: str | None = None,
+    official_brand_domain: str | None = None,
 ) -> str:
     """
     Renders the link paragraph appended to the product description.
@@ -127,9 +140,10 @@ def build_link_block(
     """
     links: list[str] = []
 
+    cat_display = "Chopper" if (category_name or "").strip().lower() == "manual chopper" else category_name
     cat_url = category_url(category_name, parent_category)
     if cat_url:
-        links.append(f"Browse more {_anchor(cat_url, category_name)}")
+        links.append(f"Browse more {_anchor(cat_url, cat_display)}")
 
     b_url = brand_url(brand_name)
     if b_url:

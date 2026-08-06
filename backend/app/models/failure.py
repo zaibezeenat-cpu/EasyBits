@@ -1,5 +1,6 @@
-from pydantic import BaseModel
 from typing import Literal
+
+from pydantic import BaseModel
 
 FailureCategory = Literal[
     "source_unreachable", "no_reliable_source_found", "spec_conflict", "variant_shaped",

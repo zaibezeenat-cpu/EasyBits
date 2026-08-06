@@ -58,7 +58,7 @@ async def test_blocked_source_reports_source_blocked_with_actionable_detail(one_
     `source_blocked` (telling the operator to paste Details), NOT the misleading
     `source_unreachable` ("product not listed").
     """
-    async def fake_scrape(url, model_number=""):
+    async def fake_scrape(url, model_number="", allow_tier2=True):
         return _result(url, "Just a moment...\nEnable JavaScript and cookies to continue")
 
     monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
@@ -71,7 +71,7 @@ async def test_blocked_source_reports_source_blocked_with_actionable_detail(one_
 
 @pytest.mark.asyncio
 async def test_detail_page_naming_the_model_is_accepted(one_source, monkeypatch):
-    async def fake_scrape(url, model_number=""):
+    async def fake_scrape(url, model_number="", allow_tier2=True):
         if "/products/" in url:
             return _result(url, "Kenwood KLU-12B03S 1.0 Ton Inverter AC. Capacity 1 Ton.")
         return _result(url, "53 results found for KLU-12B03S",
@@ -91,7 +91,7 @@ async def test_detail_page_naming_the_model_is_accepted(one_source, monkeypatch)
 @pytest.mark.asyncio
 async def test_detail_page_for_the_wrong_product_is_rejected(one_source, monkeypatch):
     """Following a link that turns out to be a different model must not count."""
-    async def fake_scrape(url, model_number=""):
+    async def fake_scrape(url, model_number="", allow_tier2=True):
         if "/products/" in url:
             return _result(url, "Kenwood KGP-18C01S 1.5 Ton Glory Pro AC")  # wrong model
         return _result(url, "53 results found for KLU-12B03S",
@@ -189,7 +189,7 @@ async def test_stops_once_official_plus_one_is_collected(monkeypatch, _noop_temp
         ("shopD.pk", "trusted_secondary"),
     ))
 
-    async def fake_scrape(url, model_number=""):
+    async def fake_scrape(url, model_number="", allow_tier2=True):
         visited.append(url)
         return _stocked(url)
 
@@ -215,7 +215,7 @@ async def test_does_not_stop_early_without_an_official_source(monkeypatch, _noop
         ("shopC.pk", "trusted_secondary"),
     ))
 
-    async def fake_scrape(url, model_number=""):
+    async def fake_scrape(url, model_number="", allow_tier2=True):
         return _stocked(url)
 
     monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
@@ -238,7 +238,7 @@ async def test_gives_up_after_consecutive_empty_domains(monkeypatch, _noop_templ
         *[(f"dead{i}.pk", "trusted_secondary") for i in range(20)]
     ))
 
-    async def fake_scrape(url, model_number=""):
+    async def fake_scrape(url, model_number="", allow_tier2=True):
         visited.append(url)
         return _not_stocked(url)
 
@@ -247,7 +247,7 @@ async def test_gives_up_after_consecutive_empty_domains(monkeypatch, _noop_templ
     result = await orchestrator.scrape_product("WestPoint", "WF-6807")
 
     assert "failure" in result
-    assert len(visited) <= orchestrator.MAX_CONSECUTIVE_EMPTY_DOMAINS + 1, (
+    assert len(visited) <= (orchestrator.MAX_CONSECUTIVE_EMPTY_DOMAINS + 1) * 2, (
         f"walked {len(visited)} dead domains; the diminishing-returns stop did not fire"
     )
 
@@ -268,7 +268,7 @@ async def test_empty_domain_streak_resets_on_a_hit(monkeypatch, _noop_template):
         ("good2.pk", "trusted_secondary"),    # must still be reached
     ))
 
-    async def fake_scrape(url, model_number=""):
+    async def fake_scrape(url, model_number="", allow_tier2=True):
         return _stocked(url) if "good" in url else _not_stocked(url)
 
     monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)

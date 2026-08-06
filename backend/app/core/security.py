@@ -13,13 +13,11 @@ RLS. Deploying that publicly would expose the entire database.
 import hmac
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import jwt
+from app.core.config import settings
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +66,7 @@ def create_access_token() -> tuple[str, int]:
     return token, int(expires_delta.total_seconds())
 
 
-def decode_token(token: str) -> Optional[dict]:
+def decode_token(token: str) -> dict | None:
     """Returns the claims, or None when the token is invalid or expired."""
     try:
         return jwt.decode(token, _signing_key(), algorithms=[ALGORITHM])
@@ -77,7 +75,7 @@ def decode_token(token: str) -> Optional[dict]:
 
 
 async def require_auth(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> dict:
     """FastAPI dependency enforcing a valid bearer token."""
     if credentials is None or not credentials.credentials:

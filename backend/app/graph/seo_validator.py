@@ -1,13 +1,13 @@
 import re
-from typing import List
-from app.models.writer_output import WriterOutput
-from app.models.review_result import SeoCheckResult
+
 from app.builders.name_builder import contains_forbidden_abbreviation
-from app.builders.warranty_verifier import extract_durations
 from app.builders.seo_title_builder import (
     seo_title_contains_focus_keyword,
     title_ends_with_power_word,
 )
+from app.builders.warranty_verifier import extract_durations
+from app.models.review_result import SeoCheckResult
+from app.models.writer_output import WriterOutput
 
 # Keyword presence is measured two ways, because a long Boss-Rule product name
 # behaves differently from a short keyword:
@@ -57,7 +57,7 @@ def validate_seo_rules(
     category_name: str,
     expected_cta: str,
     secondary_keyword: str = "",
-) -> List[SeoCheckResult]:
+) -> list[SeoCheckResult]:
     """
     V8.0 Production Lock — Deterministic SEO checks.
 
@@ -296,10 +296,13 @@ def validate_seo_rules(
         if kw.strip():
             all_keywords.append(kw.strip().lower())
             
-    # Deduplicate in case an LSI matches the secondary keyword
-    all_keywords = list(set(all_keywords))
-    
-    combined_occurrences = sum(concatenated_content.lower().count(kw) for kw in all_keywords)
+    # Deduplicate and sort longest first so overlapping substrings aren't double counted
+    all_keywords = sorted(list(set(all_keywords)), key=len, reverse=True)
+    if all_keywords:
+        kw_pattern = re.compile(r"|".join(re.escape(k) for k in all_keywords), re.IGNORECASE)
+        combined_occurrences = len(kw_pattern.findall(concatenated_content))
+    else:
+        combined_occurrences = 0
     combined_density = (combined_occurrences / word_count) if word_count else 0.0
     
     results.append(SeoCheckResult(

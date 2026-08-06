@@ -47,7 +47,8 @@ AUTHORITATIVE_HOME_APPLIANCE = [
 ]
 
 AUTHORITATIVE_KITCHEN = [
-    "Air Fryer", "Blender", "Coffee Maker", "Electric Kettle", "Hotplate", "Oven Toaster",
+    "Air Fryer", "Blender", "Chopper", "Coffee Maker", "Electric Kettle", "Hotplate",
+    "Manual Chopper", "Oven Toaster",
 ]
 
 
@@ -68,14 +69,14 @@ def test_home_appliance_subcategories_match_exactly():
 
 def test_kitchen_appliance_subcategories_match_exactly():
     assert sorted(KITCHEN_APPLIANCE_CHILDREN) == sorted(AUTHORITATIVE_KITCHEN)
-    assert len(KITCHEN_APPLIANCE_CHILDREN) == 6
+    assert len(KITCHEN_APPLIANCE_CHILDREN) == 8
 
 
 def test_total_category_count_matches_the_tree():
-    # 4 top-level + 22 Home Appliance + 6 Kitchen Appliances = 32 rows. Electric
+    # 4 top-level + 22 Home Appliance + 8 Kitchen Appliances = 34 rows. Electric
     # Kettle is counted twice on purpose -- it exists under two parents.
     total = len(TOP_LEVEL) + len(HOME_APPLIANCE_CHILDREN) + len(KITCHEN_APPLIANCE_CHILDREN)
-    assert total == 32
+    assert total == 34
 
 
 def test_no_category_is_actually_a_brand():

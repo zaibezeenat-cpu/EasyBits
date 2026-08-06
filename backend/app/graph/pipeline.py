@@ -1,12 +1,23 @@
-from langgraph.graph import StateGraph, END
-from app.graph.state import PipelineState
 from app.graph.nodes import (
-    intake_triage, extractor_node, image_fallback_node, 
-    writer_node, reviewer_node, escalation_handler,
-    deterministic_builders_node, html_sanitize_node,
-    duplicate_sku_guard_node, csv_row_assembler_node
+    csv_row_assembler_node,
+    deterministic_builders_node,
+    duplicate_sku_guard_node,
+    escalation_handler,
+    extractor_node,
+    html_sanitize_node,
+    image_fallback_node,
+    intake_triage,
+    reviewer_node,
+    writer_node,
 )
-from app.graph.router import after_intake_router, after_extractor_router, after_review_router
+from app.graph.router import (
+    after_extractor_router,
+    after_intake_router,
+    after_review_router,
+)
+from app.graph.state import PipelineState
+from langgraph.graph import END, StateGraph
+
 
 def create_pipeline():
     workflow = StateGraph(PipelineState)

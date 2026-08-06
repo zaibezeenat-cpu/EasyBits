@@ -68,9 +68,10 @@ def enforce_keyword_density(
     all_keywords.sort(key=len, reverse=True)
 
     for kw in all_keywords:
-        # Check combined density on this iteration
+        # Check combined density on this iteration using non-overlapping keyword pattern
+        combined_pattern = re.compile(r"|".join(re.escape(k) for k in all_keywords), re.IGNORECASE)
         combined_occurrences = sum(
-            sum(s.lower().count(k) for k in all_keywords) for s in [
+            len(combined_pattern.findall(s)) for s in [
                 wo.hero_heading, wo.hero_paragraph, *wo.feature_texts, *wo.features_bullets, *[f.answer for f in wo.faqs]
             ]
         )

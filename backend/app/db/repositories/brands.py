@@ -1,12 +1,13 @@
-from typing import Optional
+
 from app.db.repositories.base import BaseRepository
 from app.models.taxonomy import Brand
+
 
 class BrandsRepository(BaseRepository[Brand]):
     def __init__(self):
         super().__init__(model=Brand, table_name="brands")
 
-    async def get_by_name(self, name: str) -> Optional[Brand]:
+    async def get_by_name(self, name: str) -> Brand | None:
         results = await self.list(filters={"name": name})
         return results[0] if results else None
 

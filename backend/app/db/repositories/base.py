@@ -1,13 +1,15 @@
+import builtins
 import typing
-from typing import List, Any, Type
+from typing import Any
 from uuid import UUID
-from pydantic import BaseModel
+
 from app.db.supabase_client import get_supabase
+from pydantic import BaseModel
 
 T = typing.TypeVar("T", bound=BaseModel)
 
 class BaseRepository(typing.Generic[T]):
-    def __init__(self, model: Type[T], table_name: str):
+    def __init__(self, model: type[T], table_name: str):
         self.model = model
         self.table_name = table_name
 
@@ -18,7 +20,7 @@ class BaseRepository(typing.Generic[T]):
             return self.model.model_validate(response.data[0])
         return None
 
-    async def list(self, filters: dict[str, Any] = {}) -> List[T]:
+    async def list(self, filters: dict[str, Any] = {}) -> list[T]:
         db = await get_supabase()
         query = db.table(self.table_name).select("*")
         for key, value in filters.items():
@@ -31,7 +33,7 @@ class BaseRepository(typing.Generic[T]):
         response = await db.table(self.table_name).insert(data).execute()
         return self.model.model_validate(response.data[0])
 
-    async def create_many(self, rows: List[dict[str, Any]]) -> List[T]:
+    async def create_many(self, rows: builtins.list[dict[str, Any]]) -> builtins.list[T]:
         """
         Inserts many rows in a single round-trip. Used by bulk import so a batch of
         50-100 products costs one DB call instead of one per row. An empty list is a

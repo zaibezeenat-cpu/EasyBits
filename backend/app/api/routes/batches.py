@@ -1,14 +1,14 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
-from typing import List
 from uuid import UUID
-from pydantic import BaseModel, Field
-from app.models.batch import Batch
-from app.models.raw_input import RawProductInput
+
+from app.api.routes.products import build_product_row
+from app.db.repositories.audit import audit_repo
 from app.db.repositories.batches import batches_repo
 from app.db.repositories.products import products_repo
-from app.db.repositories.audit import audit_repo
-from app.api.routes.products import build_product_row
 from app.graph.batch_processor import BatchProcessor
+from app.models.batch import Batch
+from app.models.raw_input import RawProductInput
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from pydantic import BaseModel, Field
 
 router = APIRouter()
 
@@ -17,7 +17,7 @@ class BulkBatchRequest(BaseModel):
     label: str
     # At least one row -- an empty bulk import is a client error (422), not a
     # silently-created empty batch.
-    rows: List[RawProductInput] = Field(min_length=1)
+    rows: list[RawProductInput] = Field(min_length=1)
     # WooCommerce-importer-style guard: when False, rows carrying an existing_id
     # are SKIPPED rather than regenerated, so an accidental upload cannot overwrite
     # live products. When True (default), existing_id rows are updated in place.
@@ -29,7 +29,7 @@ class BulkBatchResult(BaseModel):
     created_count: int
     skipped: int
 
-@router.get("/", response_model=List[Batch])
+@router.get("/", response_model=list[Batch])
 async def list_batches():
     """Recent Batches, ordered newest first — used by the Dashboard and Batches page."""
     return await batches_repo.list_recent()
@@ -65,7 +65,7 @@ async def create_batch_bulk(
     """
     batch_id = await batches_repo.create_batch(payload.label)
 
-    eligible: List[RawProductInput] = []
+    eligible: list[RawProductInput] = []
     skipped = 0
     for row in payload.rows:
         if row.existing_id and not payload.update_existing:

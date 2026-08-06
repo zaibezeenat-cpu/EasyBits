@@ -55,7 +55,13 @@ Template: {template_type}   <!-- "A" = 3 image/feature blocks, "B" = 1 text sect
    values for alt_text_1/2/3 (they may be unused by the renderer, but the field is
    required) using the same rule.
 
-6. faqs: exactly 5 question/answer pairs. Questions 1-4 are about real product features
+6. Minimum Length Requirement: The COMBINED total word count of all your generated body 
+   text (hero_paragraph, feature_texts, features_bullets, and faqs) MUST strictly exceed 
+   250 words. If you write less than 250 words, the 3 required keyword occurrences will 
+   trigger a keyword stuffing penalty (density > 2.5%). Expand your text naturally by 
+   describing the benefits of the real product features in detail, even for simple products.
+
+7. faqs: exactly 5 question/answer pairs. Questions 1-4 are about real product features
    from the Ground Truth above (never about an UNKNOWN field). Question 5 MUST be exactly
    "What is the official warranty?" with answer "It comes with a {warranty_phrase} provided
    by {brand_name}."

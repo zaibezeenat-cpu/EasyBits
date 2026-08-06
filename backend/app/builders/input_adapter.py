@@ -9,7 +9,7 @@ documents the real-world error it prevents.
 """
 import re
 from decimal import Decimal
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -19,21 +19,21 @@ TemplateChoice = Literal["A", "B"]
 class ParsedSheetRow(BaseModel):
     """One input row, normalised into what the pipeline actually needs."""
     product_name: str
-    sku: Optional[str] = None
+    sku: str | None = None
     # The model number the SKU was built from. Exposed because the bulk-import
     # preview needs it: without it the operator cannot tell whether the row was
     # matched to the right product before anything is created.
-    model_number: Optional[str] = None
-    brand_name: Optional[str] = None
-    category_name: Optional[str] = None
-    category_parent: Optional[str] = None
+    model_number: str | None = None
+    brand_name: str | None = None
+    category_name: str | None = None
+    category_parent: str | None = None
     regular_price: Decimal
-    sale_price: Optional[Decimal] = None
-    warranty_phrase: Optional[str] = None
-    template_choice: Optional[TemplateChoice] = None
+    sale_price: Decimal | None = None
+    warranty_phrase: str | None = None
+    template_choice: TemplateChoice | None = None
 
     @property
-    def category_path(self) -> Optional[str]:
+    def category_path(self) -> str | None:
         """
         The breadcrumb WooCommerce actually imports: "[Parent] > [Category]",
         e.g. "Home Appliance > Air conditioner".
@@ -67,24 +67,41 @@ class ParsedSheetRow(BaseModel):
 
 # --- Price assignment -------------------------------------------------------
 
-def assign_prices(price_a: Decimal, price_b: Decimal) -> tuple[Decimal, Optional[Decimal]]:
-    """
-    Returns (regular_price, sale_price) — the HIGHER value is always the regular
-    (struck-through) price and the LOWER is always the sale price.
+DEFAULT_MARKUP = Decimal("1.10")
 
-    WHY THIS IGNORES THE COLUMN LABELS: in the real sheet the column headed
-    "Regular Price" actually holds the *selling* price and "Sale Price" holds the
-    original higher price -- confirmed against real exported rows (139999/150000
-    became Sale=139999, Regular=150000; 199999/220000 became Sale=199999,
-    Regular=220000). Trusting the headers publishes the higher number as the sale
-    price, i.e. a price INCREASE displayed to customers as a discount. Deriving
-    the roles from the values instead makes that class of error impossible
-    regardless of how the two columns are filled in or reordered.
 
-    If both values are equal there is no discount, so sale_price is None rather
-    than equal-to-regular (WooCommerce renders an equal sale price as no
-    discount anyway, and phase1.md's price check requires sale < regular).
+def assign_prices(
+    price_a: Optional[Decimal] = None,
+    price_b: Optional[Decimal] = None,
+    sale_price: Optional[Decimal] = None,
+    regular_price: Optional[Decimal] = None,
+) -> tuple[Decimal, Optional[Decimal]]:
     """
+    Returns (regular_price, sale_price).
+
+    If sale_price is provided:
+        - If regular_price is also provided, we use both (ensuring regular > sale).
+        - If regular_price is missing, we calculate a markup for it.
+    
+    Legacy support (price_a / price_b):
+    Ignores column labels and uses the HIGHER value as regular price.
+    """
+    if sale_price is not None:
+        if sale_price <= 0:
+            raise ValueError(f"Sale price must be positive, got {sale_price}")
+        if regular_price is not None:
+            if regular_price <= 0:
+                raise ValueError(f"Regular price must be positive, got {regular_price}")
+            high, low = max(regular_price, sale_price), min(regular_price, sale_price)
+            return high, (low if high > low else None)
+        else:
+            # Auto-calculate markup
+            calc_regular = (sale_price * DEFAULT_MARKUP).quantize(Decimal("1.00"))
+            return calc_regular, sale_price
+
+    if price_a is None or price_b is None:
+        raise ValueError("Must provide either (sale_price) or (price_a and price_b)")
+
     if price_a <= 0 or price_b <= 0:
         raise ValueError(f"Prices must be positive, got {price_a} and {price_b}")
 
@@ -101,8 +118,8 @@ _UNIT_SUFFIXES = r"(?:L|LTR|LITERS?|KG|TON|TONS|W|KW|V|CU|CUFT|INCH|IN|MM|CM)"
 _CAPACITY_LIKE = re.compile(rf"^\d+(?:\.\d+)?{_UNIT_SUFFIXES}$", re.IGNORECASE)
 
 
-def build_sku(model_number: str, color: Optional[str] = None,
-              variant: Optional[str] = None) -> Optional[str]:
+def build_sku(model_number: str, color: str | None = None,
+              variant: str | None = None) -> str | None:
     """
     Builds the unique SKU: model number plus a distinguishing attribute.
 
@@ -134,7 +151,7 @@ def build_sku(model_number: str, color: Optional[str] = None,
     return base
 
 
-def extract_sku(product_name: str) -> Optional[str]:
+def extract_sku(product_name: str) -> str | None:
     """
     Pulls the model number out of a product name, e.g.
         "Kenwood KLU-12B03S 1.0 Ton Luxury Ultra Inverter AC"  -> "KLU-12B03S"
@@ -175,7 +192,7 @@ def extract_sku(product_name: str) -> Optional[str]:
 
 # --- Brand matching ---------------------------------------------------------
 
-def match_brand(product_name: str, known_brands: list[str]) -> Optional[str]:
+def match_brand(product_name: str, known_brands: list[str]) -> str | None:
     """
     Finds the brand in a product name and returns it in the EXACT casing stored
     in the live taxonomy (e.g. "DAWLANCE", not "Dawlance").
@@ -215,12 +232,23 @@ _DEFAULT_CATEGORY_ALIASES: dict[str, list[str]] = {
     "washing machine": [r"\bwasher\b"],
     "deep freezer": [r"\bfreezer\b"],
     "electric kettle": [r"\bkettle\b"],
-    "oven toaster": [r"\btoaster\b"],
+    "oven toaster": [r"\boven\s*toaster\b"],
+    "toaster": [r"\btoaster\b"],
     "hotplate": [r"\bhot\s*plate\b"],
     "fans": [r"\bceiling\s*fan\b", r"\bpedestal\s*fan\b", r"\bfan\b"],
     "led tv": [r"\bsmart\s*tv\b", r"\btv\b"],
     "vacuum cleaner": [r"\bvacuum\b"],
     "microwave oven": [r"\bmicrowave\b"],
+    "grinder": [r"\bgrinder\b"],
+    "mixer": [r"\bbeater\b", r"\begg\s*beater\b", r"\bhand\s*mixer\b"],
+    "chopper": [r"\bmeat\s*chopper\b", r"\bfood\s*chopper\b"],
+    "manual chopper": [r"\bslicer\b", r"\bcutter\b", r"\bwonder\b", r"\bmanual\s*chopper\b", r"\bpull\s*chopper\b"],
+    "garment steam iron": [r"\biron\b", r"\bsteam\s*iron\b"],
+    "air fryer": [r"\bfryer\b", r"\bair\s*fryer\b"],
+    "food processor": [r"\bprocessor\b"],
+    "sandwich maker": [r"\bsandwich\b"],
+    "roti maker": [r"\broti\b"],
+    "pizza pan": [r"\bpizza\b"],
 }
 
 
@@ -237,7 +265,9 @@ _DEFAULT_CATEGORY_ALIASES: dict[str, list[str]] = {
 # frontend) to add a rule when a genuinely adjective-like category is created.
 #
 # Keyed by lowercased category name.
-_DEFAULT_CATEGORY_EXCLUSIONS: dict[str, list[str]] = {}
+_DEFAULT_CATEGORY_EXCLUSIONS: dict[str, list[str]] = {
+    "chopper": [r"\bmanual\b", r"\bpull\b", r"\bhandy\b", r"\bcutter\b", r"\bslicer\b"],
+}
 
 
 def _derive_name_pattern(category_name: str) -> str:
@@ -255,9 +285,10 @@ def _derive_name_pattern(category_name: str) -> str:
 def infer_category(
     product_name: str,
     known_categories: list[str],
-    category_aliases: Optional[dict[str, list[str]]] = None,
-    category_exclusions: Optional[dict[str, list[str]]] = None,
-) -> Optional[str]:
+    category_aliases: dict[str, list[str]] | None = None,
+    category_exclusions: dict[str, list[str]] | None = None,
+    top_level_categories: list[str] | None = None,
+) -> str | None:
     """
     Infers the category from the product name, restricted to categories that
     actually exist in the live taxonomy (`known_categories` comes from the
@@ -274,11 +305,15 @@ def infer_category(
     that is how "Inverter" stops hijacking every "Inverter AC" (see
     _DEFAULT_CATEGORY_EXCLUSIONS).
 
-    Returns None if zero OR MORE THAN ONE category still matches. Ambiguity is
-    treated as failure on purpose: a wrong category produces a wrong
-    "Parent > Category" breadcrumb and files the product in the wrong place on
-    the live store, which is harder to notice and undo than a row sitting in
-    Manual Review.
+    Fallback behaviour (no LLM, no escalation):
+      - Exactly 1 sub-category match → return it (normal path).
+      - 0 or multiple sub-category matches → try matching top_level_categories
+        (e.g. "Kitchen Appliances") by name/alias the same way. If exactly 1
+        top-level matches → return it. This means a product like "Potato Cutter"
+        that has no specific sub-category is filed under the correct top-level
+        (Kitchen Appliances) rather than escalated. The category_spec_schemas
+        table must have a row for every top-level that serves as a catch-all.
+      - Still no match → return None (caller can LLM-fallback or escalate).
     """
     if not product_name or not known_categories:
         return None
@@ -286,54 +321,81 @@ def infer_category(
     aliases = _DEFAULT_CATEGORY_ALIASES if category_aliases is None else category_aliases
     exclusions = _DEFAULT_CATEGORY_EXCLUSIONS if category_exclusions is None else category_exclusions
 
-    matches = set()
-    for category in known_categories:
-        patterns = [_derive_name_pattern(category)]
-        patterns.extend(aliases.get(category.lower(), []))
-        if not any(re.search(p, product_name, re.IGNORECASE) for p in patterns):
-            continue
-        # The category name is present, but only as a modifier of a different
-        # appliance type -- not this product's category.
-        if any(
-            re.search(p, product_name, re.IGNORECASE)
-            for p in exclusions.get(category.lower(), [])
-        ):
-            continue
-        matches.add(category)
+    def _match_against(candidates: list[str]) -> set[str]:
+        found: set[str] = set()
+        for category in candidates:
+            patterns = [_derive_name_pattern(category)]
+            patterns.extend(aliases.get(category.lower(), []))
+            if not any(re.search(p, product_name, re.IGNORECASE) for p in patterns):
+                continue
+            if any(
+                re.search(p, product_name, re.IGNORECASE)
+                for p in exclusions.get(category.lower(), [])
+            ):
+                continue
+            found.add(category)
+        return found
 
+    # --- Pass 1: sub-categories (or all known_categories when top_level not split) ---
+    sub_categories = [
+        c for c in known_categories
+        if not top_level_categories or c not in top_level_categories
+    ]
+    matches = _match_against(sub_categories)
     if len(matches) == 1:
         return matches.pop()
+    elif len(matches) > 1:
+        # If one match is a more specific variant of another (e.g. "Hand Mixer" vs "Mixer"),
+        # select the longest, most specific sub-category match.
+        sorted_matches = sorted(matches, key=len, reverse=True)
+        longest = sorted_matches[0]
+        if all(shorter.lower() in longest.lower() for shorter in sorted_matches[1:]):
+            return longest
+
+    # --- Pass 2: top-level fallback ---
+    # If 0 or multiple sub-categories match, try the top-level names.
+    # A product with no specific sub-category (e.g. "Potato Cutter") gets
+    # filed under the best top-level (e.g. "Kitchen Appliances") rather than
+    # going to LLM or Manual Review.
+    if top_level_categories:
+        top_matches = _match_against(top_level_categories)
+        if len(top_matches) == 1:
+            return top_matches.pop()
+
     return None
 
 
 # --- Template selection -----------------------------------------------------
 
-def detect_template(status_text: Optional[str]) -> Optional[TemplateChoice]:
+def detect_template(status_text: str | None) -> TemplateChoice | None:
     """
     Maps the sheet's free-text Status column to a template:
-      "...images FOUND, SO MAKE A DESCRIPTION WITH IMAGE ONE..." -> "A" (zig-zag image grid)
-      "no description images here so used no images template"    -> "B" (text only)
+      "...no image description template..." -> "A" (text only)
+      "...image description template..." -> "B" (zig-zag image grid)
 
     Returns None when the text says neither, so the pipeline's existing
-    image_fallback_node decides from the real scraped image count instead. That
-    is deliberate: guessing "A" on an ambiguous status emits three <img src="">
-    placeholders that ship broken-looking images if nobody fills them in.
+    image_fallback_node decides from the real scraped image count instead.
     """
     if not status_text:
         return None
 
-    text = status_text.lower()
-    # Check the negative first: "no description images" also contains "images".
-    if "no images" in text or "no description image" in text:
-        return "B"
-    if "images found" in text or "image found" in text:
+    text = status_text.lower().strip()
+    
+    # Support exact letters A/B for shorthand
+    if text == "a": return "A"
+    if text == "b": return "B"
+    
+    # Check the negative first: "no image" also contains "image".
+    if "no image" in text:
         return "A"
+    if "image" in text:
+        return "B"
     return None
 
 
 # --- Warranty ---------------------------------------------------------------
 
-def normalise_warranty(warranty_text: Optional[str]) -> Optional[str]:
+def normalise_warranty(warranty_text: str | None) -> str | None:
     """
     The sheet's Warranty column is the authoritative per-product warranty and
     flows into warranty_override, which writer_node prefers over the
@@ -351,48 +413,56 @@ def normalise_warranty(warranty_text: Optional[str]) -> Optional[str]:
 
 def parse_sheet_row(
     product_name: str,
-    price_a: Decimal,
-    price_b: Decimal,
-    warranty_text: Optional[str] = None,
-    status_text: Optional[str] = None,
-    known_brands: Optional[list[str]] = None,
-    known_categories: Optional[list[str]] = None,
-    category_parents: Optional[dict[str, str]] = None,
-    color: Optional[str] = None,
-    variant: Optional[str] = None,
+    price_a: Decimal | None = None,
+    price_b: Decimal | None = None,
+    sale_price: Decimal | None = None,
+    regular_price: Decimal | None = None,
+    warranty_text: str | None = None,
+    status_text: str | None = None,
+    known_brands: list[str] | None = None,
+    known_categories: list[str] | None = None,
+    category_parents: dict[str, str] | None = None,
+    top_level_categories: list[str] | None = None,
+    color: str | None = None,
+    variant: str | None = None,
+    brand_override: str | None = None,
+    model_number_override: str | None = None,
 ) -> ParsedSheetRow:
     """
     Normalises one spreadsheet row. `price_a`/`price_b` are the two price cells
-    in sheet order; their roles are derived from their values, not their headers
-    (see assign_prices).
-
-    `known_brands` / `known_categories` come from the live taxonomy tables so
-    brand casing is exact and categories are restricted to ones that really
-    exist. `category_parents` maps child category name -> parent name (also from
-    the categories table) and produces the "Parent > Category" breadcrumb via
-    ParsedSheetRow.category_path. Anything that cannot be resolved is left None
-    -- check ParsedSheetRow.missing_required() and escalate rather than guessing.
+    in legacy sheet order; newer formats use `sale_price` directly.
     """
-    regular_price, sale_price = assign_prices(price_a, price_b)
-    category_name = infer_category(product_name, known_categories or [])
+    regular_price_val, sale_price_val = assign_prices(
+        price_a=price_a,
+        price_b=price_b,
+        sale_price=sale_price,
+        regular_price=regular_price,
+    )
+    category_name = infer_category(
+        product_name,
+        known_categories or [],
+        top_level_categories=top_level_categories,
+    )
 
-    # SKU = model number + a distinguishing qualifier. The same model ships in
-    # several colours, so the bare model number is not unique -- and a duplicate
-    # SKU makes WooCommerce OVERWRITE the live product rather than add one.
-    # `color` is usually only known after extraction, so it is optional here;
-    # the caller can rebuild the SKU with build_sku() once colour is confirmed.
-    model_number = extract_sku(product_name)
-    sku = build_sku(model_number, color=color, variant=variant) if model_number else None
+    resolved_brand = None
+    if brand_override:
+        resolved_brand = match_brand(brand_override, known_brands or []) or brand_override.strip()
+    if not resolved_brand:
+        resolved_brand = match_brand(product_name, known_brands or [])
+
+    extracted_model = model_number_override.strip() if model_number_override else extract_sku(product_name)
+    sku = build_sku(extracted_model, color=color, variant=variant) if extracted_model else None
 
     return ParsedSheetRow(
         product_name=product_name.strip(),
         sku=sku,
-        model_number=model_number,
-        brand_name=match_brand(product_name, known_brands or []),
+        model_number=extracted_model,
+        brand_name=resolved_brand,
         category_name=category_name,
         category_parent=(category_parents or {}).get(category_name) if category_name else None,
-        regular_price=regular_price,
-        sale_price=sale_price,
+        regular_price=regular_price_val,
+        sale_price=sale_price_val,
         warranty_phrase=normalise_warranty(warranty_text),
         template_choice=detect_template(status_text),
     )
+

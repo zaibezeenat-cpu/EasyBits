@@ -69,30 +69,38 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
     skipped: list[str] = []
 
     for i, row in enumerate(rows, 1):
-        name = _pick(row, "Name", "Product", "Raw Product Data", "Model")
-        reg = _to_decimal(_pick(row, "Regular", "Regular Price"))
-        sale = _to_decimal(_pick(row, "Sale", "Sale Price"))
-        if not name or reg is None or sale is None:
-            skipped.append(f"row {i}: missing name or a price ({name!r})")
+        name = _pick(row, "Official_Model_Title", "Original_Item Description", "Name", "Product", "Product Name", "Raw Product Data", "Model")
+        reg = _to_decimal(_pick(row, "Regular_Price", "Original_PRICE", "Regular", "Regular Price"))
+        sale = _to_decimal(_pick(row, "Sale_Price", "Original_PRICE", "Sale", "Sale Price"))
+        
+        if sale is None and reg is not None:
+            sale = reg
+        elif reg is None and sale is not None:
+            reg = sale
+
+        if not name or sale is None:
+            skipped.append(f"row {i}: missing name or sale price ({name!r})")
             continue
 
+        brand_col = _pick(row, "Vendor", "Brand") or "Anex"
+        model_col = _pick(row, "Input_Model_Code", "Official_SKU", "Original_Model / Code", "Model Number", "Model")
+
         parsed = parse_sheet_row(
-            product_name=name, price_a=reg, price_b=sale,
+            product_name=name, 
+            price_a=reg, price_b=sale,
+            sale_price=sale,
+            regular_price=reg,
             warranty_text=_pick(row, "Warranty"),
             status_text=_pick(row, "Status"),
+            brand_override=brand_col,
+            model_number_override=model_col,
             known_brands=known_brands, known_categories=known_categories,
             category_parents=category_parents,
         )
 
-        # Brand: prefer an explicit "Brand" column (matched to the exact taxonomy
-        # casing), else the brand inferred from the product name.
         brand_name = parsed.brand_name
-        brand_col = _pick(row, "Brand")
         if brand_col:
-            brand_name = next((b for b in known_brands if b.lower() == brand_col.lower()), None)
-            if brand_name is None:
-                skipped.append(f"row {i}: brand '{brand_col}' not in taxonomy for {name!r}")
-                continue
+            brand_name = next((b for b in known_brands if b.lower() == brand_col.lower()), brand_name or "Anex")
 
         category = parsed.category_name
         if category is None:  # deterministic match failed -> LLM picks from the list
@@ -110,22 +118,37 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
             continue
 
         existing_id = _pick(row, "Existing ID", "Existing Id", "ID")
+        images_url = _pick(row, "Image_URLs", "Images")
+
         inputs.append(RawProductInput(
             sku=parsed.sku, model_number=parsed.model_number,
             brand_name=brand_name, category_name=category,
-            product_type=category,  # extraction refines the real type for the title
+            product_type=category,
             regular_price=parsed.regular_price, sale_price=parsed.sale_price,
             warranty_override=parsed.warranty_phrase,
             template_choice=parsed.template_choice or "B",
-            official_url=_pick(row, "Website Link", "Link", "URL") or None,
-            source_details=_pick(row, "Details") or None,
+            official_url=_pick(row, "Product_URL", "Official URL", "Website Link", "Link", "URL") or None,
+            source_details=_pick(row, "Clean_Description_Text", "Full_Description_HTML", "Details") or None,
+            user_overrides={"Images": images_url} if images_url else {},
             existing_id=existing_id or None,
         ))
 
     return inputs, skipped
 
 
+import time
+import argparse
+import asyncio
+import csv
+import sys
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
 async def run(input_path: str, output_path: str, strict: bool) -> None:
+    start_time = time.perf_counter()
     rows = list(csv.DictReader(open(input_path, encoding="utf-8-sig")))
     print(f"Read {len(rows)} rows from {input_path}")
 
@@ -156,7 +179,9 @@ async def run(input_path: str, output_path: str, strict: bool) -> None:
     with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
         f.write(generate_csv_file([p.csv_row for p in ready]))
 
+    elapsed = time.perf_counter() - start_time
     print(f"\n===== DONE =====")
+    print(f"Total time elapsed: {elapsed:.2f} seconds ({elapsed / len(inputs):.2f}s per product)")
     print(f"READY  -> {len(ready)} products written to {output_path}")
     print(f"REVIEW -> {len(review)} products need attention:")
     for p in review:

@@ -10,7 +10,7 @@ This module previously had `log_event` and NOTHING CALLED IT, so the table was
 permanently empty. Writers are now wired at the call sites below.
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.db.supabase_client import get_supabase
 
@@ -23,10 +23,10 @@ class AuditRepository:
 
     async def log_event(
         self,
-        product_id: Optional[str] = None,
-        batch_id: Optional[str] = None,
+        product_id: str | None = None,
+        batch_id: str | None = None,
         event_type: str = "",
-        payload: Optional[Dict[str, Any]] = None,
+        payload: dict[str, Any] | None = None,
         actor: str = "system",
     ) -> None:
         """
@@ -53,7 +53,7 @@ class AuditRepository:
         except Exception as e:
             logger.warning(f"Could not write audit event '{event_type}': {e}")
 
-    async def list_recent(self, limit: int = 100, event_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def list_recent(self, limit: int = 100, event_type: str | None = None) -> list[dict[str, Any]]:
         db = await get_supabase()
         query = db.table(self.table_name).select("*").order("created_at", desc=True).limit(limit)
         if event_type:

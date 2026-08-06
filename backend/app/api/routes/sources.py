@@ -1,12 +1,10 @@
 import logging
-from typing import Optional
-
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
 
 from app.core.domain_utils import InvalidDomainError, normalize_domain
 from app.db.repositories.audit import audit_repo
 from app.db.repositories.sources import sources_repo
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +23,8 @@ class TrustedSourceUpdate(BaseModel):
     An all-None body is rejected rather than treated as a no-op success --
     a request that changes nothing but reports 200 reads as a saved edit.
     """
-    is_active: Optional[bool] = None
-    priority: Optional[int] = Field(default=None, ge=0, le=999)
+    is_active: bool | None = None
+    priority: int | None = Field(default=None, ge=0, le=999)
 
 
 class SourceOrder(BaseModel):

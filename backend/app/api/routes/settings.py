@@ -1,9 +1,6 @@
 import logging
 import os
-from typing import Literal, Optional
-
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from typing import Literal
 
 from app.builders.seo_title_builder import CATEGORY_TITLE_DESCRIPTORS, POWER_WORD_SUFFIX
 from app.builders.sku_snapshot_parser import (
@@ -14,6 +11,8 @@ from app.builders.sku_snapshot_parser import (
 from app.db.repositories.audit import audit_repo
 from app.db.repositories.settings import settings_repo
 from app.db.repositories.sku_snapshot import sku_snapshot_repo
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ DEFAULT_PROVIDED_SOURCE_MODE: ProvidedSourceMode = "augment"
 
 class SnapshotStatus(BaseModel):
     sku_count: int
-    last_imported_at: Optional[str] = None
+    last_imported_at: str | None = None
 
 
 class SnapshotUploadResult(BaseModel):

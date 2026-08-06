@@ -1,11 +1,11 @@
 import asyncio
 import json
-from typing import Dict, List
+
 
 class SSEManager:
     def __init__(self):
         # batch_id -> list of queues
-        self.queues: Dict[str, List[asyncio.Queue]] = {}
+        self.queues: dict[str, list[asyncio.Queue]] = {}
 
     async def subscribe(self, batch_id: str):
         queue = asyncio.Queue()

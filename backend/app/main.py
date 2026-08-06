@@ -1,22 +1,18 @@
 import logging
 
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-
 from app.api.routes import (
     audit,
     auth,
     batches,
     dashboard,
     products,
-    settings as settings_routes,
     sources,
     taxonomy,
     templates,
     warranty,
+)
+from app.api.routes import (
+    settings as settings_routes,
 )
 from app.api.routes.auth import limiter
 from app.core.config import settings
@@ -27,6 +23,11 @@ from app.core.middleware import (
     SecurityHeadersMiddleware,
 )
 from app.sse import sse_manager
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 setup_logging()
 logger = logging.getLogger(__name__)

@@ -1,12 +1,13 @@
 import logging
 from datetime import datetime
-from typing import Type, TypeVar
-from pydantic import BaseModel
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage
+from typing import TypeVar
+
 from app.core.config import settings
 from app.db.repositories.llm_usage import llm_usage_repo
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -148,7 +149,7 @@ class LLMProvider:
         role: str,
         system_prompt: str,
         human_prompt: str,
-        response_model: Type[T],
+        response_model: type[T],
     ) -> T:
         if role not in ROLE_MODEL_CONFIG:
             raise ValueError(f"Unknown role '{role}' -- no model configured. Add it to ROLE_MODEL_CONFIG.")
