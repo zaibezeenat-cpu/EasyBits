@@ -1,52 +1,77 @@
 """
-Price handling when the input sheet supplies only one price.
+Price handling in bulk_run's CSV path.
 
-The sheet often carries a single price. `bulk_run` used to manufacture the other
-one: `reg = sale * 1.20`, producing a "regular price" the product was never sold
-at, purely so the storefront would show a discount.
+Two rules, both explicit operator decisions (kiachahiye.pk), not system
+defaults:
 
-That is a fabricated fact of exactly the kind the rest of this pipeline refuses
-to publish -- and unlike an invented wattage it carries legal and commercial
-exposure. Fake "was" pricing is prohibited by consumer-protection rules, and
-Google Merchant Center and Facebook Catalog both disapprove listings for it.
+1. HEADERS ARE TRUSTED HERE. Unlike the UI paste-flow (`input_adapter.
+   assign_prices`, still value-based because that flow never sees a header),
+   bulk_run reads a CSV with named "Regular"/"Sale" columns, so the operator's
+   label is authoritative. A sheet where Sale > Regular is the operator's
+   mistake to fix, not the system's to silently correct by swapping -- it is
+   rejected with a clear message instead.
 
-The truthful handling is already implemented in
-`input_adapter.assign_prices()`: the higher value is the regular price, the
-lower is the sale price, and equal values mean no discount (`sale_price=None`).
-One price in therefore means one price out, with no discount shown.
+2. A SINGLE PRICE GETS A 20% MARKUP ANCHOR. This reverses an earlier fix in
+   this same file that deleted a `reg = sale * 1.20` markup as a fabricated
+   "was" price. The operator confirmed this is deliberate marketing/business
+   policy, not a system-invented number, and asked for it back -- so a
+   single-price row still shows a discount, in whichever direction the missing
+   price falls.
 """
 from decimal import Decimal
 
 import pytest
 
 from app.builders.input_adapter import assign_prices
+from scripts.bulk_run import _resolve_prices
 
 
-def test_a_single_price_is_never_marked_up_into_a_fake_discount():
+# --- _resolve_prices: bulk_run's header-aware, business-rule price resolution ---
+
+def test_sale_higher_than_regular_is_rejected_not_auto_swapped():
     """
-    THE REGRESSION. 4260 in must not become "was 5112, now 4260".
+    THE HEADER-TRUST RULE. bulk_run knows which column is which -- unlike the UI
+    paste-flow, it read the value from a column literally named "Sale". A sheet
+    saying Regular=4000, Sale=5000 is a mistake in the sheet, and the operator
+    asked for an error here, not a silent correction.
     """
-    regular, sale = assign_prices(Decimal("4260"), Decimal("4260"))
+    with pytest.raises(ValueError, match="Sale price.*higher than Regular"):
+        _resolve_prices(Decimal("4000"), Decimal("5000"))
 
+
+def test_two_valid_prices_pass_through_unchanged():
+    regular, sale = _resolve_prices(Decimal("9700"), Decimal("6400"))
+    assert regular == Decimal("9700")
+    assert sale == Decimal("6400")
+
+
+def test_equal_prices_still_mean_no_discount():
+    regular, sale = _resolve_prices(Decimal("4260"), Decimal("4260"))
     assert regular == Decimal("4260")
-    assert sale is None, "a discount was invented out of a single price"
+    assert sale is None
 
 
-@pytest.mark.parametrize("multiplier", ["1.20", "1.2", "1.10", "1.15"])
-def test_no_markup_multiplier_survives_in_bulk_run(multiplier):
+def test_sale_only_manufactures_regular_at_20_percent_markup():
     """
-    Guards the source directly: the fabrication was a literal in bulk_run, so a
-    behavioural test alone would not stop someone reintroducing it.
+    THE OPERATOR'S MARKETING RULE. Only "Sale" filled -> "Regular" is the anchor
+    price, 20% above it, so the storefront always shows a discount. This is the
+    exact shape of the chopper test sheet that crashed: only a Sale column.
     """
-    from pathlib import Path
+    regular, sale = _resolve_prices(None, Decimal("5000"))
+    assert regular == Decimal("6000")
+    assert sale == Decimal("5000")
 
-    source = Path(__file__).resolve().parents[2] / "scripts" / "bulk_run.py"
-    text = source.read_text(encoding="utf-8")
 
-    assert f'Decimal("{multiplier}")' not in text, (
-        f"bulk_run.py multiplies a price by {multiplier} -- this invents a "
-        f"regular price the product was never sold at"
-    )
+def test_regular_only_manufactures_sale_at_20_percent_markup():
+    """The mirror case: only "Regular" filled -> Sale is 20% below it."""
+    regular, sale = _resolve_prices(Decimal("6000"), None)
+    assert regular == Decimal("6000")
+    assert sale == Decimal("5000")
+
+
+def test_neither_price_resolves_to_none():
+    """The caller's existing 'missing name or a price' skip depends on this."""
+    assert _resolve_prices(None, None) is None
 
 
 def test_a_single_price_row_builds_without_crashing():

@@ -61,6 +61,59 @@ def _to_decimal(value: str):
         return None
 
 
+# The operator's marketing anchor: a single-price row still shows a discount,
+# 20% either side of the one price given.
+MARKUP = Decimal("1.20")
+
+
+def _resolve_prices(reg: Decimal | None, sale: Decimal | None) -> tuple[Decimal, Decimal | None] | None:
+    """
+    Resolves the sheet's "Regular"/"Sale" columns into (regular_price, sale_price).
+
+    Unlike input_adapter.assign_prices (used by the UI paste-flow, which never
+    sees a column header and so has no choice but to derive roles from the
+    values), this CSV path reads named columns -- the operator's label is
+    authoritative here. Two explicit business rules, both confirmed by the
+    operator (kiachahiye.pk), not system defaults:
+
+    1. HEADERS ARE TRUSTED. A sheet claiming Sale > Regular is a mistake in the
+       sheet, not a swap to perform silently -- raises ValueError so the row is
+       skipped with a clear reason instead of shipping a wrong price.
+    2. A SINGLE PRICE GETS A 20% MARKUP ANCHOR, in whichever direction the
+       missing price falls, so the storefront always shows a discount. This is
+       deliberate marketing policy the operator asked for -- it reverses an
+       earlier fix in this file that removed the same markup as a fabricated
+       price; the difference is that this is now their stated business rule,
+       not a code default nobody chose.
+
+    Args:
+        reg: The sheet's "Regular" column, or None if blank.
+        sale: The sheet's "Sale" column, or None if blank.
+
+    Returns:
+        (regular_price, sale_price) with sale_price None when there is no
+        discount, or None when neither price was given (caller skips the row).
+
+    Raises:
+        ValueError: if both are given and sale > reg.
+    """
+    if reg is None and sale is None:
+        return None
+    if reg is not None and sale is not None:
+        if sale > reg:
+            raise ValueError(
+                f"Sale price {sale} is higher than Regular price {reg} -- "
+                f"fix the sheet (the Sale column should be the LOWER price)"
+            )
+        if sale == reg:
+            return reg, None
+        return reg, sale
+    if sale is not None:  # only "Sale" given -> Regular is the 20%-above anchor
+        return (sale * MARKUP).quantize(Decimal(1)), sale
+    # only "Regular" given -> Sale is the 20%-below discount
+    return reg, (reg / MARKUP).quantize(Decimal(1))
+
+
 async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[str]]:
     known_brands = await brands_repo.get_active_names()
     known_categories, category_parents = await categories_repo.get_active_names_and_parents()
@@ -73,30 +126,24 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
         reg_str = _pick(row, "Regular", "Regular Price", "Regular price", "Price", "Original_PRICE")
         sale_str = _pick(row, "Sale", "Sale Price", "Sale price", "Sale_Price")
         
-        reg = _to_decimal(reg_str)
-        sale = _to_decimal(sale_str)
-
-        # One price in the sheet means one price out. It is passed twice so that
-        # assign_prices() -- which decides regular-vs-sale from the VALUES, not the
-        # column headers -- sees them as equal and returns no discount.
-        #
-        # This deliberately does NOT manufacture the missing price. An earlier
-        # version computed `reg = sale * 1.20` so the storefront would always show
-        # a discount, but that invents a price the product was never sold at.
-        # Beyond being false, fake "was" pricing breaches consumer-protection rules
-        # and gets listings disapproved by Google Merchant Center and Facebook
-        # Catalog. If a real markup exists it belongs in the source sheet.
-        if reg is None and sale is not None:
-            reg = sale
-        elif sale is None and reg is not None:
-            sale = reg
-
-        if not name or reg is None or sale is None:
-            skipped.append(f"row {i}: missing name or a price ({name!r})")
+        try:
+            resolved = _resolve_prices(_to_decimal(reg_str), _to_decimal(sale_str))
+        except ValueError as e:
+            skipped.append(f"row {i}: {e} ({name!r})")
             continue
 
+        if not name or resolved is None:
+            skipped.append(f"row {i}: missing name or a price ({name!r})")
+            continue
+        reg, sale = resolved
+
+        # price_a/price_b feed input_adapter.assign_prices, which re-derives
+        # regular-vs-sale from the two VALUES (it is also used by the UI
+        # paste-flow, which never sees a header). reg is already the larger of
+        # the two by construction above, so this is a no-op here -- it never
+        # sees a case it would resolve differently.
         parsed = parse_sheet_row(
-            product_name=name, price_a=reg, price_b=sale,
+            product_name=name, price_a=reg, price_b=(sale if sale is not None else reg),
             warranty_text=_pick(row, "Warranty", "Warranty Details"),
             status_text=_pick(row, "Status", "Template", "Template Choice"),
             known_brands=known_brands, known_categories=known_categories,
