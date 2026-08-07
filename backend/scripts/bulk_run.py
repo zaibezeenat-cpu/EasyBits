@@ -192,6 +192,52 @@ async def run(input_path: str, output_path: str, strict: bool) -> None:
             detail = str(p.failure_detail.get("detail", ""))[:120]
         print(f"  {p.sku}: {reason} {detail}")
 
+    _print_inferred_report(ready)
+
+
+def _print_inferred_report(products: list) -> None:
+    """Lists every value that was DEDUCED rather than read from a source.
+
+    This is the operator's review surface. Inferred values ship in the CSV
+    unmarked -- a "(based on features)" suffix on a live storefront reads badly to
+    customers -- so without this report a deduction would be invisible. There is
+    no usable admin UI, which makes the terminal the only place a human sees them
+    before the CSV is uploaded.
+
+    Each line carries the quote the deduction rests on, so it can be judged
+    without opening the source page.
+
+    Args:
+        products: The products that reached READY, i.e. the ones whose values are
+            about to be imported.
+    """
+    lines: list[tuple[str, str, str, str]] = []
+    for p in products:
+        extraction = p.extraction_result or {}
+        for citation in extraction.get("citations", []):
+            if citation.get("confidence") != "inferred":
+                continue
+            lines.append((
+                p.sku,
+                citation.get("field_name", "?"),
+                citation.get("value", "?"),
+                (citation.get("exact_quote") or "").strip(),
+            ))
+
+    if not lines:
+        return
+
+    skus = {sku for sku, *_ in lines}
+    print(
+        f"\nINFERRED VALUES ({len(skus)} product(s), {len(lines)} value(s)) "
+        f"— deduced from described features, not stated by any source:"
+    )
+    for sku, field, value, quote in lines:
+        print(f"  {sku:<16} {field} = {value!r}")
+        if quote:
+            print(f"  {'':<16}   from: \"{quote[:100]}\"")
+    print("  Worth a glance before uploading — these are the only guessed values.")
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Bulk-generate the kiachahiye 51-column WooCommerce CSV.")

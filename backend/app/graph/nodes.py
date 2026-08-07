@@ -271,6 +271,13 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
                 EXTRACTOR_SYSTEM_PROMPT,
                 category_name=state.raw_input.category_name,
                 required_fields_json=json.dumps([f.key for f in state.category_schema.fields]),
+                # Only the fields the schema marks inferable are shown as
+                # deducible. The model is never handed a measurement here, so it
+                # is never invited to guess one -- and a citation for anything
+                # outside this list is discarded regardless of what it returns.
+                inferable_fields_json=json.dumps(
+                    [f.key for f in state.category_schema.fields if f.inferable]
+                ),
                 source_documents=source_docs
             ),
             human_prompt=human_prompt,
@@ -311,6 +318,9 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
                         EXTRACTOR_SYSTEM_PROMPT,
                         category_name=state.raw_input.category_name,
                         required_fields_json=json.dumps([f.key for f in state.category_schema.fields]),
+                        inferable_fields_json=json.dumps(
+                            [f.key for f in state.category_schema.fields if f.inferable]
+                        ),
                         source_documents=merged_docs,
                     ),
                     human_prompt=human_prompt,
@@ -322,28 +332,44 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
 
         single = [f for f, s in uncorroborated.items() if s == "single_source"]
         conflicting = [f for f, s in uncorroborated.items() if s == "conflict"]
-        
-        # Check if we have an official source
-        has_official = any(d.get("source_type") == "official" for d in scraped.get("scraped_data", []))
-        
-        if has_official:
-            CORE_FIELDS = {"title", "brand", "regular_price", "category"}
-            
-            original_missing_count = len(missing)
-            original_single_count = len(single)
-            
-            # Only keep missing fields that are absolutely critical
-            missing = [field for field in missing if field in CORE_FIELDS]
-            
-            # If an official source provides a spec, it doesn't need a second corroborating source.
-            single = [field for field in single if field in CORE_FIELDS]
-            
-            if (original_missing_count > len(missing) or original_single_count > len(single)) and not missing and not single and not conflicting:
-                logger.info("Official source verified: gracefully bypassing missing/uncorroborated secondary specs.")
 
-        # Re-evaluate if we still have issues after applying the official source rule
+        # Which fields may be DEDUCED is decided by the category schema, not here.
+        #
+        # This replaces an earlier CORE_FIELDS bypass that filtered `missing` and
+        # `single` against {"title", "brand", "regular_price", "category"}. Only
+        # "brand" is a real spec-schema key -- the others are CSV columns -- so the
+        # filter emptied the list almost entirely: with an official source present,
+        # a product missing its model_number, wattage and voltage sailed through.
+        #
+        # The two legitimate cases it was reaching for are both handled properly now:
+        #   * field genuinely does not apply  -> required: false in the schema
+        #   * field is derivable from features -> inferable: true, deduced and
+        #                                         cited as confidence="inferred"
+        # Both are per-category and set by the operator in the Taxonomy Manager,
+        # rather than one hardcoded rule applied to every category at once.
+        rejected = extraction.drop_disallowed_inferences(state.category_schema)
+        if rejected:
+            logger.warning(
+                f"Extractor inferred value(s) for non-inferable field(s) {rejected} "
+                f"on {state.raw_input.sku}; discarded. Mark the field `inferable` in "
+                f"the category schema if deduction is genuinely acceptable for it."
+            )
+            # An inference for a field that was never allowed one may have masked a
+            # real gap, so the missing/uncorroborated sets are recomputed.
+            missing = extraction.missing_required_fields(state.category_schema)
+            uncorroborated = extraction.uncorroborated_required_fields(state.category_schema)
+            single = [f for f, s in uncorroborated.items() if s == "single_source"]
+            conflicting = [f for f, s in uncorroborated.items() if s == "conflict"]
+
+        deduced = extraction.inferred_fields(state.category_schema)
+        if deduced:
+            logger.info(
+                f"Deduced {len(deduced)} inferable field(s) for {state.raw_input.sku}: "
+                f"{deduced}. Each is cited as 'inferred' and never counts as confirmed."
+            )
+
         has_issues = bool(missing or single or conflicting)
-        
+
         if has_issues:
             parts = []
             if missing:

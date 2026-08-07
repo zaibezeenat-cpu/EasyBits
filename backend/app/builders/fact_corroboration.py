@@ -30,7 +30,9 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel
 
-ResolutionStatus = Literal["confirmed", "corroborated", "single_source", "conflict", "unknown"]
+ResolutionStatus = Literal[
+    "confirmed", "corroborated", "single_source", "conflict", "unknown", "inferred"
+]
 
 # Source tiers, most authoritative first. Mirrors the discovery tiers.
 _TIER_RANK = {"official": 3, "trusted_secondary": 2, "web": 1, "user_estimate": 0}
@@ -55,8 +57,30 @@ class FieldResolution(BaseModel):
 
     @property
     def is_confirmed(self) -> bool:
-        """A value safe to use downstream: an official source or real corroboration."""
+        """A value safe to use downstream: an official source or real corroboration.
+
+        `inferred` is deliberately excluded. Every guard in the pipeline keys off
+        this property, so letting a deduction satisfy it would quietly grant an
+        inference the standing of a verified fact -- the exact laundering this
+        design exists to prevent. Inferred values reach the CSV through
+        `is_usable`, which is explicit about what it is admitting.
+        """
         return self.status in ("confirmed", "corroborated")
+
+    @property
+    def is_inferred(self) -> bool:
+        """Deduced from described features rather than stated by a source."""
+        return self.status == "inferred"
+
+    @property
+    def is_usable(self) -> bool:
+        """Publishable: either verified, or a permitted inference.
+
+        Kept separate from `is_confirmed` so that every caller has to decide,
+        in writing, whether an inference is acceptable for its purpose. Warranty
+        checks and price references must not use this; the spec table may.
+        """
+        return self.is_confirmed or self.is_inferred
 
 
 # --- Value normalisation ----------------------------------------------------
@@ -167,6 +191,26 @@ def resolve_field(field_name: str, citations: list[_CitationLike]) -> FieldResol
         and (c.value or "").strip().upper() != _UNKNOWN
     ]
     if not relevant:
+        # No source STATES the value. Fall back to a deduction if one was made --
+        # but only after confirming nothing stated it, so a real citation always
+        # wins over an inference rather than competing with it.
+        inferred = [
+            c for c in citations
+            if c.field_name == field_name
+            and c.confidence == "inferred"
+            and (c.value or "").strip().upper() != _UNKNOWN
+        ]
+        if inferred:
+            # Inferences are not corroborated against each other: two models
+            # deducing the same thing from the same text is not independent
+            # agreement. The first is used, and the quote travels with it.
+            first = inferred[0]
+            return FieldResolution(
+                field_name=field_name,
+                value=first.value,
+                status="inferred",
+                supporting_domains=[_domain(first.source_url) or "inferred"],
+            )
         return FieldResolution(field_name=field_name, value=None, status="unknown")
 
     groups: dict[str, _Group] = {}

@@ -63,6 +63,22 @@ PASSTHROUGH_ALLOWED = frozenset({
 })
 
 
+# Pipeline breadcrumb -> live-store breadcrumb, applied on export only.
+#
+# The pipeline sometimes needs a category the store does not have. A manual
+# chopper has no wattage, so it needs its own spec schema and therefore its own
+# category -- but the store sells these as plain "Chopper". Without the
+# translation the CSV would create a duplicate category in WooCommerce.
+#
+# Both sides must be EXACT, case-sensitive breadcrumbs: WooCommerce matches
+# taxonomy terms by exact string, so "chopper" and "Chopper" are two categories.
+# The right-hand side is never validated by the casing lock (it belongs to the
+# store, not to us), so it has to be correct here by inspection.
+STORE_CATEGORY_ALIASES: dict[str, str] = {
+    "Kitchen Appliances > Manual Chopper": "Kitchen Appliances > Chopper",
+}
+
+
 class BrandCasingMismatchError(ValueError):
     """Raised when the brand name does not exactly match the live taxonomy casing (V8.0 lock)."""
 
@@ -266,10 +282,23 @@ def assemble_csv_row(
                 f"taxonomy/identity and cannot be set from the input sheet."
             )
 
-    # --- Chopper Alias (Phase 3) ---
-    # Convert 'Manual Chopper' to 'Chopper' on export so WooCommerce doesn't create duplicate categories.
-    if row.get("Categories") == "Kitchen Appliances > Manual Chopper":
-        row["Categories"] = "Kitchen Appliances > Chopper"
+    # --- Pipeline category -> store category ---
+    # Applied AFTER the casing lock, and that order is correct: the lock verifies
+    # the value against the PIPELINE's taxonomy, this translates it into the
+    # STORE's. They are different namespaces on purpose.
+    #
+    # "Manual Chopper" exists in the pipeline so the category can carry its own
+    # spec schema -- a manual chopper has no wattage, so that field is not
+    # required for it. The live store has no such term; it sells these under
+    # "Chopper". Exporting the pipeline name would create a second category in
+    # WooCommerce, which is the very thing the casing lock guards against.
+    mapped_category = STORE_CATEGORY_ALIASES.get(row.get("Categories", ""))
+    if mapped_category:
+        logger.info(
+            f"Category '{row['Categories']}' exported as '{mapped_category}' for SKU "
+            f"{p.sku} (pipeline taxonomy -> live store taxonomy)."
+        )
+        row["Categories"] = mapped_category
 
     # --- Strict CSV Sanitization ---
     # Strip literal line-breaks (\n, \r) and tab indentations (\t) from EVERY string field.

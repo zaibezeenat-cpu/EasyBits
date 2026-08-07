@@ -218,3 +218,28 @@ def test_a_blocked_override_is_logged_by_name(caplog):
         _row_with_passthrough({"Brands": "haier", "Images": "https://x/a.jpg"})
     assert "Brands" in caplog.text
     assert "Images" not in caplog.text, "an allowed column must not be reported as blocked"
+
+
+def test_category_alias_targets_are_exact_breadcrumbs():
+    """
+    WooCommerce matches taxonomy terms by exact string, so a mis-cased or
+    parentless target creates a SECOND category instead of filing under the
+    existing one. The alias target is never checked by the casing lock -- it
+    belongs to the store, not to our taxonomy -- so it has to be right here.
+    """
+    from app.builders.csv_assembler import STORE_CATEGORY_ALIASES
+
+    for source, target in STORE_CATEGORY_ALIASES.items():
+        assert " > " in target, f"{target!r} is not a Parent > Child breadcrumb"
+        assert target == target.strip(), f"{target!r} has stray whitespace"
+        assert source != target, f"{source!r} maps to itself"
+        # Same parent on both sides: an alias renames the leaf, it does not move
+        # the product into a different section of the store.
+        assert source.split(" > ")[0] == target.split(" > ")[0], (
+            f"{source!r} -> {target!r} changes the parent category"
+        )
+
+
+def test_a_category_without_an_alias_is_exported_untouched():
+    row = _row_with_passthrough({})
+    assert row["Categories"] == "Electronics > AC"
