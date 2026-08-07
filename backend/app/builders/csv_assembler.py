@@ -3,7 +3,7 @@ import io
 import logging
 from typing import Any
 
-from app.builders.html_sanitizer import strip_newlines_for_csv
+from app.builders.html_sanitizer import neutralize_csv_formula, strip_newlines_for_csv
 from app.builders.internal_links import build_canonical_url, build_product_slug
 from app.builders.seo_title_builder import build_focus_keyword_field
 from app.graph.state import PipelineState
@@ -303,19 +303,33 @@ def assemble_csv_row(
     # --- Strict CSV Sanitization ---
     # Strip literal line-breaks (\n, \r) and tab indentations (\t) from EVERY string field.
     # This prevents column shifts when users copy-paste the generated CSV into Google Sheets.
+    #
+    # Then neutralize formula cells. Both operator passthrough and scraped source
+    # text land in this row, and a cell starting with = + - @ is executed by
+    # Excel/Sheets on open. Numbers are exempt, so "Published": "-1" survives --
+    # see neutralize_csv_formula.
     sanitized_row = {}
     for k, v in row.items():
         if isinstance(v, str):
-            sanitized_row[k] = strip_newlines_for_csv(v)
+            sanitized_row[k] = neutralize_csv_formula(strip_newlines_for_csv(v))
         else:
             sanitized_row[k] = v
 
     return sanitized_row
 
 def generate_csv_file(rows: list[dict[str, Any]]) -> str:
+    """Writes the rows out, re-applying the formula guard at the file boundary.
+
+    assemble_csv_row already neutralizes its own output, and the guard is
+    idempotent -- this repeat covers rows built by any other path (tests,
+    re-exports, a future endpoint) so no writer can bypass it by accident.
+    """
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=COLUMN_ORDER, quoting=csv.QUOTE_ALL)
     writer.writeheader()
     for row in rows:
-        writer.writerow(row)
+        writer.writerow({
+            k: neutralize_csv_formula(v) if isinstance(v, str) else v
+            for k, v in row.items()
+        })
     return output.getvalue()
