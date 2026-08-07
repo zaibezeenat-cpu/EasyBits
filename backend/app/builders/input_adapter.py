@@ -274,11 +274,12 @@ def infer_category(
     that is how "Inverter" stops hijacking every "Inverter AC" (see
     _DEFAULT_CATEGORY_EXCLUSIONS).
 
-    Returns None if zero OR MORE THAN ONE category still matches. Ambiguity is
-    treated as failure on purpose: a wrong category produces a wrong
+    When several categories match, the deepest of a specificity chain wins
+    ("Manual Chopper" over "Chopper") -- see _most_specific. Anything else
+    ambiguous returns None, on purpose: a wrong category produces a wrong
     "Parent > Category" breadcrumb and files the product in the wrong place on
     the live store, which is harder to notice and undo than a row sitting in
-    Manual Review.
+    Manual Review. Zero matches also returns None.
     """
     if not product_name or not known_categories:
         return None
@@ -303,6 +304,43 @@ def infer_category(
 
     if len(matches) == 1:
         return matches.pop()
+    return _most_specific(matches)
+
+
+def _most_specific(matches: set[str]) -> str | None:
+    """Resolves a specificity chain to its deepest category, else None.
+
+    A taxonomy can hold both a general category and a narrower variant of it
+    ("Chopper" / "Manual Chopper"). A title naming the specific one necessarily
+    contains the general one's name too, so both match and the caller's
+    ambiguity guard would reject a title that was in fact perfectly explicit.
+
+    A category is MORE SPECIFIC than another when its words are a strict
+    superset of the other's -- "Manual Chopper" over "Chopper". Choosing it is
+    reading the title, not deducing past it: the extra word is literally
+    present. Word sets, not substrings, so "Chop Saw" and "Chopper" are
+    unrelated despite the shared prefix.
+
+    Genuinely unrelated matches ("Blender" and "Chopper" both named) are left
+    ambiguous -- resolving those would need information the title does not
+    carry, which is the caller's reason for escalating to Manual Review.
+
+    Args:
+        matches: Category names that all matched the product title.
+
+    Returns:
+        The single deepest category when every match lies on one chain,
+        otherwise None.
+    """
+    if not matches:
+        return None
+
+    words = {c: frozenset(c.lower().split()) for c in matches}
+    deepest = max(matches, key=lambda c: len(words[c]))
+    # Every other match must be a strict subset of the winner; if any is not,
+    # the matches are not one chain and the ambiguity is real.
+    if all(words[c] < words[deepest] for c in matches if c != deepest):
+        return deepest
     return None
 
 
