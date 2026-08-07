@@ -1,0 +1,55 @@
+---
+trigger: model_decision
+description: when working with typescript
+---
+
+---
+alwaysApply: false
+---
+---
+alwaysApply: false
+---
+---
+description: TypeScript conventions for Thriftify — strict mode, never `any`, discriminated unions, Result types over throw, `satisfies` over `as`, `as const` over `enum`. Apply when writing or reviewing TypeScript/TSX.
+globs: ["**/*.ts", "**/*.tsx", "**/tsconfig*.json"]
+alwaysApply: false
+---
+
+# TypeScript conventions
+
+## Type discipline
+
+- strict: true always
+- Never `any` — use `unknown` and narrow
+- Discriminated unions over optional fields for state
+- Type-only imports: `import type { Foo }`
+- Result types over throw for handleable failures
+
+## Patterns
+
+- `as const` over `enum`
+- `satisfies` over type assertion
+- `readonly` for immutable arrays + props
+- Brand types for IDs when mixing is risky
+
+## Async
+
+- async/await over .then chains
+- Handle rejections explicitly
+- Promise.all parallel, allSettled for partial success
+
+## Banned
+
+- `any`
+- `// @ts-ignore` (use `// @ts-expect-error`)
+- Unsafe `x as Foo` where `satisfies` works
+- Mutating function parameters
+- `enum` (use union literals + `as const`)
+- `} catch {}`
+
+## Tsconfig extras beyond strict
+
+- noUncheckedIndexedAccess
+- noImplicitOverride
+- exactOptionalPropertyTypes
+- noFallthroughCasesInSwitch
