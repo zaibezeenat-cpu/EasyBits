@@ -17,3 +17,14 @@
 -- makes this safe to re-run.
 
 ALTER TYPE confidence_level ADD VALUE IF NOT EXISTS 'inferred';
+
+-- The evidence an inference rests on. SourceCitation requires it whenever
+-- confidence='inferred' (a deduction with nothing behind it is a guess), so the
+-- table has to be able to hold it.
+--
+-- Nothing writes to source_citations today -- the pipeline persists citations
+-- inside products.extraction_result, which is JSONB and accepts any shape -- so
+-- this is not fixing a live failure. It is keeping the table in step with the
+-- model, so that wiring citations_repo.create_many() later does not fail on an
+-- unknown column. Nullable: only inferred citations carry a quote.
+ALTER TABLE source_citations ADD COLUMN IF NOT EXISTS exact_quote TEXT;
