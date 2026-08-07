@@ -187,3 +187,115 @@ def test_deduced_fields_and_their_evidence_are_retrievable():
 def test_fields_default_to_not_inferable():
     """Safety by default: a schema written without thinking about this is strict."""
     assert SpecField(key="x", label="X").inferable is False
+
+
+# ---------------------------------------------------------------------------
+# THE MECHANISM MUST BE CATEGORY-AGNOSTIC.
+#
+# Everything above is proved with a vacuum cleaner, which proves it works for a
+# vacuum cleaner. The mechanism reads `inferable` off whatever SpecField it is
+# handed and knows nothing about product types -- but "should be general" is a
+# claim, and a claim about behaviour belongs in a test.
+#
+# These run the same three rules across every category the catalogue actually
+# sells, with that category's real fields and real source wording.
+# ---------------------------------------------------------------------------
+
+# (category, field, deduced value, the words a real listing would carry)
+CATEGORICAL_CASES = [
+    ("Vacuum Cleaner", "vacuum_type", "Canister",
+     "flexible hose, extension tube, big dust bag"),
+    ("Washing Machine", "washing_machine_type", "Twin Tub",
+     "separate wash and spin tubs"),
+    ("Air Conditioner", "compressor_type", "Inverter",
+     "DC inverter compressor saves up to 60% electricity"),
+    ("Refrigerator", "door_type", "Double Door",
+     "separate freezer compartment with its own door"),
+    ("Microwave Oven", "control_type", "Digital",
+     "digital touch panel with 10 preset menus"),
+    ("Manual Chopper", "operation_type", "Manual",
+     "pull-cord operated, no electricity required"),
+    ("Blender", "jar_material", "Glass",
+     "heat-resistant glass jar, dishwasher safe"),
+    ("Water Dispenser", "cooling_type", "Compressor",
+     "compressor cooling with refrigerant"),
+]
+
+# Measurements, one per category. None of these may EVER be deduced -- there is
+# no evidence a number follows from, only a guess.
+MEASUREMENT_CASES = [
+    ("Vacuum Cleaner", "wattage", "1800 W", "powerful suction motor"),
+    ("Washing Machine", "capacity_kg", "8 kg", "large family-size drum"),
+    ("Air Conditioner", "capacity_ton", "1.5 Ton", "cools a medium room quickly"),
+    ("Refrigerator", "capacity_litres", "340 L", "spacious interior"),
+    ("Microwave Oven", "capacity_litres", "25 L", "roomy cavity"),
+    ("Blender", "wattage", "600 W", "strong motor for hard ingredients"),
+]
+
+
+@pytest.mark.parametrize("category,field,value,evidence", CATEGORICAL_CASES)
+def test_any_category_may_deduce_a_field_it_marks_inferable(category, field, value, evidence):
+    schema = _schema(SpecField(key=field, label=field, required=True, inferable=True))
+    r = _result(_cite(field, value, confidence="inferred", exact_quote=evidence))
+
+    assert r.drop_disallowed_inferences(schema) == [], f"{category}: allowed inference was dropped"
+    assert r.inferred_value(field) == value, f"{category}: deduction lost"
+    assert r.missing_required_fields(schema) == [], f"{category}: still blocked despite a deduction"
+    assert not r.resolve(field).is_confirmed, f"{category}: deduction became a verified fact"
+
+
+@pytest.mark.parametrize("category,field,value,evidence", MEASUREMENT_CASES)
+def test_no_category_may_deduce_a_measurement(category, field, value, evidence):
+    """
+    The rule that must hold everywhere. A wrong number on a live listing is the
+    failure this pipeline exists to prevent, and it does not become acceptable
+    because the category changed.
+    """
+    schema = _schema(SpecField(key=field, label=field, required=True))  # inferable defaults False
+    r = _result(_cite(field, value, confidence="inferred", exact_quote=evidence))
+
+    assert r.drop_disallowed_inferences(schema) == [field], f"{category}: a measurement was deduced"
+    assert r.inferred_value(field) is None, f"{category}: deduced measurement survived"
+    assert field in r.missing_required_fields(schema), f"{category}: absent measurement did not block"
+
+
+@pytest.mark.parametrize("category,field,_v,_e", CATEGORICAL_CASES + MEASUREMENT_CASES)
+def test_any_category_can_mark_a_field_optional(category, field, _v, _e):
+    """The manual-chopper fix generalised: required=False never blocks, anywhere."""
+    schema = _schema(SpecField(key=field, label=field, required=False))
+    assert _result().missing_required_fields(schema) == [], f"{category}: optional field blocked"
+
+
+@pytest.mark.parametrize("category,field,value,evidence", CATEGORICAL_CASES)
+def test_a_stated_value_beats_a_deduction_in_every_category(category, field, value, evidence):
+    """A real citation must win outright wherever it appears."""
+    schema = _schema(SpecField(key=field, label=field, required=True, inferable=True))
+    r = _result(
+        _cite(field, "StatedValue"),
+        _cite(field, value, confidence="inferred", exact_quote=evidence),
+    )
+    r.drop_disallowed_inferences(schema)
+    assert r.confirmed_value(field) == "StatedValue", f"{category}: deduction outranked a source"
+
+
+def test_a_mixed_schema_applies_each_rule_per_field():
+    """
+    The realistic shape: one category, several fields, different rules. A vacuum
+    may deduce its type, must never deduce its wattage, and does not care about
+    an optional colour -- all at once.
+    """
+    schema = _schema(
+        SpecField(key="vacuum_type", label="Type", required=True, inferable=True),
+        SpecField(key="wattage", label="Wattage", required=True),
+        SpecField(key="colour", label="Colour", required=False),
+    )
+    r = _result(
+        _cite("vacuum_type", "Canister", confidence="inferred", exact_quote="hose and dust bag"),
+        _cite("wattage", "1800 W", confidence="inferred", exact_quote="powerful motor"),
+    )
+
+    assert r.drop_disallowed_inferences(schema) == ["wattage"]
+    assert r.inferred_value("vacuum_type") == "Canister"   # deduced, allowed
+    assert r.missing_required_fields(schema) == ["wattage"]  # blocked, correctly
+    # colour is optional and absent -- it must not appear anywhere
+    assert "colour" not in r.missing_required_fields(schema)
