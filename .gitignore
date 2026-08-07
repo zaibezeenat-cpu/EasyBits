@@ -1,7 +1,6 @@
 # General
 .idea/
 .agents
-.claude
 .cursor
 *.log
 
