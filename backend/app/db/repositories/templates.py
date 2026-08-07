@@ -1,4 +1,4 @@
-from typing import Optional
+
 from app.db.repositories.base import BaseRepository
 from app.models.template import Template
 
@@ -7,7 +7,7 @@ class TemplatesRepository(BaseRepository[Template]):
     def __init__(self):
         super().__init__(model=Template, table_name="templates")
 
-    async def get_by_name(self, name: str) -> Optional[Template]:
+    async def get_by_name(self, name: str) -> Template | None:
         """
         Bug fix: the previous version called `self.client.from_(...)`, but
         BaseRepository has no `self.client` attribute (it uses the module-level

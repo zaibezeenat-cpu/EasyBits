@@ -23,7 +23,7 @@ preferable to a title asserting something unverified.
 """
 import re
 from collections import Counter
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from pydantic import BaseModel
 
@@ -171,8 +171,8 @@ def harvest_title_terms(
 
 def verify_terms(
     terms: list[TitleTerm],
-    confirmed_facts: Optional[dict[str, Optional[str]]] = None,
-    series: Optional[str] = None,
+    confirmed_facts: dict[str, str | None] | None = None,
+    series: str | None = None,
 ) -> list[TitleTerm]:
     """
     Marks which corroborated terms are safe to put in a product title.

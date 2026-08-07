@@ -9,7 +9,7 @@ documents the real-world error it prevents.
 """
 import re
 from decimal import Decimal
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -19,21 +19,21 @@ TemplateChoice = Literal["A", "B"]
 class ParsedSheetRow(BaseModel):
     """One input row, normalised into what the pipeline actually needs."""
     product_name: str
-    sku: Optional[str] = None
+    sku: str | None = None
     # The model number the SKU was built from. Exposed because the bulk-import
     # preview needs it: without it the operator cannot tell whether the row was
     # matched to the right product before anything is created.
-    model_number: Optional[str] = None
-    brand_name: Optional[str] = None
-    category_name: Optional[str] = None
-    category_parent: Optional[str] = None
+    model_number: str | None = None
+    brand_name: str | None = None
+    category_name: str | None = None
+    category_parent: str | None = None
     regular_price: Decimal
-    sale_price: Optional[Decimal] = None
-    warranty_phrase: Optional[str] = None
-    template_choice: Optional[TemplateChoice] = None
+    sale_price: Decimal | None = None
+    warranty_phrase: str | None = None
+    template_choice: TemplateChoice | None = None
 
     @property
-    def category_path(self) -> Optional[str]:
+    def category_path(self) -> str | None:
         """
         The breadcrumb WooCommerce actually imports: "[Parent] > [Category]",
         e.g. "Home Appliance > Air conditioner".
@@ -67,7 +67,7 @@ class ParsedSheetRow(BaseModel):
 
 # --- Price assignment -------------------------------------------------------
 
-def assign_prices(price_a: Decimal, price_b: Decimal) -> tuple[Decimal, Optional[Decimal]]:
+def assign_prices(price_a: Decimal, price_b: Decimal) -> tuple[Decimal, Decimal | None]:
     """
     Returns (regular_price, sale_price) — the HIGHER value is always the regular
     (struck-through) price and the LOWER is always the sale price.
@@ -101,8 +101,8 @@ _UNIT_SUFFIXES = r"(?:L|LTR|LITERS?|KG|TON|TONS|W|KW|V|CU|CUFT|INCH|IN|MM|CM)"
 _CAPACITY_LIKE = re.compile(rf"^\d+(?:\.\d+)?{_UNIT_SUFFIXES}$", re.IGNORECASE)
 
 
-def build_sku(model_number: str, color: Optional[str] = None,
-              variant: Optional[str] = None) -> Optional[str]:
+def build_sku(model_number: str, color: str | None = None,
+              variant: str | None = None) -> str | None:
     """
     Builds the unique SKU: model number plus a distinguishing attribute.
 
@@ -134,7 +134,7 @@ def build_sku(model_number: str, color: Optional[str] = None,
     return base
 
 
-def extract_sku(product_name: str) -> Optional[str]:
+def extract_sku(product_name: str) -> str | None:
     """
     Pulls the model number out of a product name, e.g.
         "Kenwood KLU-12B03S 1.0 Ton Luxury Ultra Inverter AC"  -> "KLU-12B03S"
@@ -175,7 +175,7 @@ def extract_sku(product_name: str) -> Optional[str]:
 
 # --- Brand matching ---------------------------------------------------------
 
-def match_brand(product_name: str, known_brands: list[str]) -> Optional[str]:
+def match_brand(product_name: str, known_brands: list[str]) -> str | None:
     """
     Finds the brand in a product name and returns it in the EXACT casing stored
     in the live taxonomy (e.g. "DAWLANCE", not "Dawlance").
@@ -255,9 +255,9 @@ def _derive_name_pattern(category_name: str) -> str:
 def infer_category(
     product_name: str,
     known_categories: list[str],
-    category_aliases: Optional[dict[str, list[str]]] = None,
-    category_exclusions: Optional[dict[str, list[str]]] = None,
-) -> Optional[str]:
+    category_aliases: dict[str, list[str]] | None = None,
+    category_exclusions: dict[str, list[str]] | None = None,
+) -> str | None:
     """
     Infers the category from the product name, restricted to categories that
     actually exist in the live taxonomy (`known_categories` comes from the
@@ -308,7 +308,7 @@ def infer_category(
 
 # --- Template selection -----------------------------------------------------
 
-def detect_template(status_text: Optional[str]) -> Optional[TemplateChoice]:
+def detect_template(status_text: str | None) -> TemplateChoice | None:
     """
     Maps the sheet's free-text Status column to a template:
       "...images FOUND, SO MAKE A DESCRIPTION WITH IMAGE ONE..." -> "A" (zig-zag image grid)
@@ -324,7 +324,7 @@ def detect_template(status_text: Optional[str]) -> Optional[TemplateChoice]:
 
     text = status_text.lower()
     # Check the negative first: "no description images" also contains "images".
-    if "no images" in text or "no description image" in text:
+    if "no image" in text or "no description image" in text or "no images" in text:
         return "B"
     if "images found" in text or "image found" in text:
         return "A"
@@ -333,7 +333,7 @@ def detect_template(status_text: Optional[str]) -> Optional[TemplateChoice]:
 
 # --- Warranty ---------------------------------------------------------------
 
-def normalise_warranty(warranty_text: Optional[str]) -> Optional[str]:
+def normalise_warranty(warranty_text: str | None) -> str | None:
     """
     The sheet's Warranty column is the authoritative per-product warranty and
     flows into warranty_override, which writer_node prefers over the
@@ -353,13 +353,13 @@ def parse_sheet_row(
     product_name: str,
     price_a: Decimal,
     price_b: Decimal,
-    warranty_text: Optional[str] = None,
-    status_text: Optional[str] = None,
-    known_brands: Optional[list[str]] = None,
-    known_categories: Optional[list[str]] = None,
-    category_parents: Optional[dict[str, str]] = None,
-    color: Optional[str] = None,
-    variant: Optional[str] = None,
+    warranty_text: str | None = None,
+    status_text: str | None = None,
+    known_brands: list[str] | None = None,
+    known_categories: list[str] | None = None,
+    category_parents: dict[str, str] | None = None,
+    color: str | None = None,
+    variant: str | None = None,
 ) -> ParsedSheetRow:
     """
     Normalises one spreadsheet row. `price_a`/`price_b` are the two price cells

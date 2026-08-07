@@ -1,7 +1,10 @@
-﻿import pytest
-from app.graph.batch_processor import BatchProcessor
+﻿from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
-from unittest.mock import AsyncMock, patch, MagicMock
+
+import pytest
+
+from app.graph.batch_processor import BatchProcessor
+
 
 @pytest.mark.asyncio
 async def test_batch_processor_sequential_delay():

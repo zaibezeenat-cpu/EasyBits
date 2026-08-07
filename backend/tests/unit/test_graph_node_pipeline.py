@@ -7,7 +7,7 @@ focus on the guarantees that protect the live store: deterministic fields are
 never taken from the LLM, the warranty is identical everywhere it appears, and
 the CSV keeps its exact 51-column shape.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -25,7 +25,7 @@ WARRANTY = "1 Year Official Warranty"
 
 
 def _schema() -> CategorySpecSchema:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return CategorySpecSchema(
         id=uuid4(), category_id=uuid4(), created_at=now, updated_at=now,
         fields=[
@@ -36,7 +36,7 @@ def _schema() -> CategorySpecSchema:
 
 
 def _extraction() -> ExtractionResult:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return ExtractionResult(
         product_id=str(uuid4()), category_key="air_conditioner",
         citations=[
@@ -80,18 +80,18 @@ def _writer_output() -> WriterOutput:
 
 
 def _state(**overrides) -> PipelineState:
-    base = dict(
-        product_id=uuid4(), batch_id=uuid4(),
-        raw_input=RawProductInput(
+    base = {
+        "product_id": uuid4(), "batch_id": uuid4(),
+        "raw_input": RawProductInput(
             sku="KLU-12B03S", model_number="KLU-12B03S", brand_name="Kenwood",
             category_name="Air conditioner", product_type="Air conditioner",
-            regular_price=Decimal("150000"), sale_price=Decimal("139999"),
+            regular_price=Decimal(150000), sale_price=Decimal(139999),
             warranty_override=WARRANTY,
         ),
-        category_schema=_schema(),
-        extraction=_extraction(),
-        selected_template_type="B",
-    )
+        "category_schema": _schema(),
+        "extraction": _extraction(),
+        "selected_template_type": "B",
+    }
     base.update(overrides)
     return PipelineState(**base)
 

@@ -17,7 +17,6 @@ URL patterns are the live site's, confirmed by the owner:
     https://kiachahiye.com/brand/anex/
 """
 import re
-from typing import Optional
 
 SITE_BASE_URL = "https://kiachahiye.com"
 
@@ -47,7 +46,7 @@ def slugify(value: str) -> str:
     return slug
 
 
-def category_url(category_name: str, parent_name: Optional[str] = None) -> Optional[str]:
+def category_url(category_name: str, parent_name: str | None = None) -> str | None:
     """
     Category archive URL. Sub-categories nest under their parent, matching the
     live site: a child without its parent would 404, so a category with no
@@ -62,7 +61,7 @@ def category_url(category_name: str, parent_name: Optional[str] = None) -> Optio
     return f"{SITE_BASE_URL}/product-category/{child}/"
 
 
-def brand_url(brand_name: str) -> Optional[str]:
+def brand_url(brand_name: str) -> str | None:
     """Brand archive URL, e.g. https://kiachahiye.com/brand/anex/"""
     slug = slugify(brand_name)
     return f"{SITE_BASE_URL}/brand/{slug}/" if slug else None
@@ -112,8 +111,8 @@ def _anchor(url: str, text: str, dofollow: bool = True) -> str:
 def build_link_block(
     brand_name: str,
     category_name: str,
-    parent_category: Optional[str] = None,
-    official_brand_domain: Optional[str] = None,
+    parent_category: str | None = None,
+    official_brand_domain: str | None = None,
 ) -> str:
     """
     Renders the link paragraph appended to the product description.

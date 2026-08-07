@@ -1,7 +1,9 @@
 from uuid import UUID
+
 from app.db.repositories.base import BaseRepository
-from app.models.batch import Batch, BatchStatus
 from app.db.supabase_client import get_supabase
+from app.models.batch import Batch, BatchStatus
+
 
 class BatchesRepository(BaseRepository[Batch]):
     def __init__(self):

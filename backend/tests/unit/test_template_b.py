@@ -12,22 +12,22 @@ NAME = "WestPoint Pakistan WF-6807 Deluxe Hair Straightener"
 
 
 def _wo(**overrides) -> WriterOutput:
-    base = dict(
-        hero_heading="Premium Styling at Home",
-        hero_paragraph="A great tool for daily styling.",
-        feature_headings=["Overview & Design", "Advanced Performance"],
-        feature_texts=["Ceramic plates for smooth glide.", "Fast, even heat every time."],
-        features_bullets=[
+    base = {
+        "hero_heading": "Premium Styling at Home",
+        "hero_paragraph": "A great tool for daily styling.",
+        "feature_headings": ["Overview & Design", "Advanced Performance"],
+        "feature_texts": ["Ceramic plates for smooth glide.", "Fast, even heat every time."],
+        "features_bullets": [
             "Ceramic Coating Plate: Glides smoothly and reduces frizz.",
             "Fast Heat-Up: Ready in seconds for quick styling.",
         ],
-        faqs=[FAQPair(question=f"Q{i}?", answer=f"A{i}.") for i in range(4)]
+        "faqs": [FAQPair(question=f"Q{i}?", answer=f"A{i}.") for i in range(4)]
         + [FAQPair(question="What is the official warranty?", answer="2 Years Warranty.")],
-        short_desc_feature_1="a", short_desc_feature_2="b", short_desc_feature_3="c",
-        rank_math_description="d" * 152,
-        lsi_keywords=["ceramic straightener", "flat iron", "hair styling tool"],
-        alt_text_1=FK, alt_text_2=FK, alt_text_3=FK,
-    )
+        "short_desc_feature_1": "a", "short_desc_feature_2": "b", "short_desc_feature_3": "c",
+        "rank_math_description": "d" * 152,
+        "lsi_keywords": ["ceramic straightener", "flat iron", "hair styling tool"],
+        "alt_text_1": FK, "alt_text_2": FK, "alt_text_3": FK,
+    }
     base.update(overrides)
     return WriterOutput(**base)
 

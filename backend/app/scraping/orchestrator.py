@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from app.core.config import settings
@@ -23,11 +23,16 @@ logger = logging.getLogger(__name__)
 # the most authoritative available.
 MAX_SOURCES_FOR_CORROBORATION = 5
 
-# Hard ceiling on scrape attempts per product, so a large source list cannot
-# blow up processing time. A brand's own site alone can burn ~12 attempts trying
-# every URL pattern when the product simply is not listed there; this bounds the
-# worst case so one product cannot stall a whole batch.
-MAX_SCRAPE_ATTEMPTS = 25
+# Attempt ceilings, ONE PER PASS rather than one shared budget.
+#
+# Discovery runs in two passes (see scrape_product): pass 1 tries every domain
+# with the cheap curl fetch only, pass 2 revisits what is left with Playwright
+# allowed. A single shared budget starves pass 2 -- pass 1 walks the whole list
+# first, so by the time the browser is permitted the budget is gone and pass 2
+# silently does nothing. Separate budgets also let each one be sized to what an
+# attempt actually COSTS: a curl fetch is ~1-2s, a rendered page ~3-6s.
+MAX_TIER1_ATTEMPTS = 30
+MAX_TIER2_ATTEMPTS = 8
 
 # Consecutive domains that may yield nothing before we conclude the remaining
 # list is not going to produce anything either.
@@ -41,7 +46,7 @@ MAX_SCRAPE_ATTEMPTS = 25
 MAX_CONSECUTIVE_EMPTY_DOMAINS = 5
 
 
-def _corroboration_satisfied(scraped_data: List[Dict[str, str]]) -> bool:
+def _corroboration_satisfied(scraped_data: list[dict[str, str]]) -> bool:
     """
     True once the sources in hand can already confirm facts, so further scraping
     cannot change any answer.
@@ -66,7 +71,8 @@ def _corroboration_satisfied(scraped_data: List[Dict[str, str]]) -> bool:
 
 
 async def _follow_to_detail_page(search_result, model_number: str,
-                                 brand_name: str = "", require_brand_identity: bool = False):
+                                 brand_name: str = "", require_brand_identity: bool = False,
+                                 allow_tier2: bool = True):
     """
     Follows the best product link from a search page to the product detail page.
 
@@ -109,7 +115,10 @@ async def _follow_to_detail_page(search_result, model_number: str,
             )
             continue
         try:
-            detail = await smart_fetch(link, model_number)
+            # Inherits the caller's pass: following a link is still a fetch, and
+            # in pass 1 it must stay browser-free like every other one. Missing
+            # this made pass 1 quietly launch Chromium for every detail page.
+            detail = await smart_fetch(link, model_number, allow_tier2=allow_tier2)
         except Exception as e:
             logger.warning(f"Could not follow product link {link}: {e}")
             continue
@@ -141,8 +150,8 @@ async def _follow_to_detail_page(search_result, model_number: str,
 
 
 async def scrape_product(
-    brand_name: str, model_number: str, tiers_to_run: Optional[tuple] = None
-) -> Dict[str, Any]:
+    brand_name: str, model_number: str, tiers_to_run: tuple | None = None
+) -> dict[str, Any]:
     """
     Discovers and scrapes sources for one product.
 
@@ -172,189 +181,239 @@ async def scrape_product(
         }
 
     # Preserve trust order while grouping the candidate URLs of each domain.
-    by_domain: Dict[str, List[Dict[str, str]]] = {}
+    by_domain: dict[str, list[dict[str, str]]] = {}
     for source in sources:
         by_domain.setdefault(source.get("domain") or source["url"], []).append(source)
 
-    scraped_data: List[Dict[str, str]] = []
-    attempted = 0
-    consecutive_empty_domains = 0
+    scraped_data: list[dict[str, str]] = []
     # Tracks whether any source served an anti-bot / CAPTCHA challenge rather than
     # a real page. If nothing usable is scraped AND a block was seen, the operator
     # is told to paste Details -- the actionable truth -- instead of the misleading
     # "product not listed".
     blocked = False
 
-    for domain, candidates in by_domain.items():
-        # THE MAIN STOP. An official source plus one cross-check already confirms
-        # everything that is ever going to be confirmed, so the rest of the list
-        # cannot change a single output -- it can only cost time. On the measured
-        # run this fires at ~9s instead of running to the attempt ceiling at 137s.
-        if _corroboration_satisfied(scraped_data):
+    # Domains that need no second look: they either produced a source, or a
+    # RENDERED page proved they do not stock the product.
+    #
+    # A pass-1 verdict is deliberately NOT enough to land here. Pass 1 is curl
+    # only, so on a JS storefront it sees an unrendered shell -- and every
+    # storefront's nav lists brand names, so "the brand appears but the model
+    # does not" looks like proof when it is nothing of the kind. Treating that as
+    # final excludes precisely the JS sites pass 2 exists to handle: measured on
+    # 4 such domains, pass 2 made ZERO fetches and the product failed as
+    # `source_unreachable` even though the browser would have found it on all 4.
+    settled_domains: set[str] = set()
+
+    for pass_num, allow_tier2 in ((1, False), (2, True)):
+        attempted = 0          # per-pass budget; see MAX_TIER1/TIER2_ATTEMPTS
+        consecutive_empty_domains = 0
+        max_attempts = MAX_TIER2_ATTEMPTS if allow_tier2 else MAX_TIER1_ATTEMPTS
+
+        if pass_num == 2:
+            # The cheap pass already answered the question -- do not pay for a
+            # browser to confirm what is settled.
+            if _corroboration_satisfied(scraped_data):
+                break
+            pending = [d for d in by_domain if d not in settled_domains]
+            if not pending:
+                break
             logger.info(
-                f"Corroboration satisfied for {brand_name} {model_number} with "
-                f"{len(scraped_data)} source(s) including an official one after "
-                f"{attempted} attempt(s); further sources cannot change the result."
+                f"Pass 1 (no browser) left {brand_name} {model_number} with "
+                f"{len(scraped_data)} source(s); starting pass 2 with Playwright "
+                f"allowed across {len(pending)} remaining domain(s)."
             )
-            break
 
-        # Diminishing returns. Covers the case the rule above cannot: a product
-        # with no official source available, where the old code would still walk
-        # the entire configured list one dead domain at a time.
-        if consecutive_empty_domains >= MAX_CONSECUTIVE_EMPTY_DOMAINS:
-            logger.info(
-                f"{consecutive_empty_domains} consecutive domains yielded nothing for "
-                f"{brand_name} {model_number}; stopping with {len(scraped_data)} source(s) "
-                f"rather than walking the remaining {len(by_domain) - attempted} domain(s)."
-            )
-            break
-
-        # Stop once enough independent sources are in hand. With 20+ configured
-        # retailers, scraping every one would take many minutes per product;
-        # corroboration only needs a handful of agreeing sources, and domains are
-        # tried in trust order (official, then trusted, then web), so the first
-        # few are the most authoritative.
-        if len(scraped_data) >= MAX_SOURCES_FOR_CORROBORATION:
-            logger.info(
-                f"Collected {len(scraped_data)} sources for {brand_name} {model_number}; "
-                f"stopping early (cap {MAX_SOURCES_FOR_CORROBORATION})."
-            )
-            break
-        if attempted >= MAX_SCRAPE_ATTEMPTS:
-            logger.info(
-                f"Reached the {MAX_SCRAPE_ATTEMPTS}-attempt ceiling for {brand_name} "
-                f"{model_number} with {len(scraped_data)} source(s); stopping to bound time."
-            )
-            break
-        sources_before_domain = len(scraped_data)
-        for source in candidates:
-            attempted += 1
-            try:
-                result = await smart_fetch(source["url"], model_number)
-            except Exception as e:
-                logger.warning(f"Scrape failed for {source['url']}: {e}")
+        for domain, candidates in by_domain.items():
+            if domain in settled_domains:
                 continue
-
-            if not result.success or not result.content:
-                continue
-
-            # An anti-bot challenge loads with content but is not the product. Flag
-            # it as a block (not a no-match) so the escalation is actionable.
-            if is_block_page(result.content):
-                blocked = True
-                logger.warning(
-                    f"{source['url']} returned an anti-bot/block page (Cloudflare etc.); "
-                    f"skipping. Operator can paste Details to bypass."
-                )
-                continue
-
-            if not search_result_mentions_product(result.content, model_number):
-                # Domain bail-out: if the search page loaded successfully AND
-                # mentions the brand name (proof the search engine is working on
-                # this domain, not just returning an error/empty page), but does
-                # NOT mention our model number, this domain has confirmed it does
-                # not stock this product. Skip all remaining URL patterns for it.
-                #
-                # WHY THIS IS SAFE: we only bail when the brand appears in content,
-                # ruling out the case where a pattern returned the wrong platform's
-                # "no results" page (which would not mention the brand at all).
-                # This preserves the original multi-pattern logic for all cases
-                # where the search page is genuinely empty or wrong-platform.
-                # Use only the FIRST alphanumeric token of the brand name for
-                # the content check. Splitting on any separator (space, hyphen,
-                # underscore) handles all real-world brand name formats:
-                #   "WestPoint Pakistan" -> "WestPoint"
-                #   "WestPoint-Pakistan" -> "WestPoint"
-                #   "Kenwood"            -> "Kenwood"
-                brand_token = re.split(r"[^a-zA-Z0-9]", brand_name)[0] if brand_name else brand_name
-                if search_result_mentions_product(result.content, brand_token):
-                    logger.info(
-                        f"Domain {domain} confirmed: search works (mentions '{brand_name}') "
-                        f"but '{model_number}' is not stocked there. "
-                        f"Skipping {len(candidates) - candidates.index(source) - 1} "
-                        f"remaining URL pattern(s) for this domain."
-                    )
-                    break  # skip remaining candidates for this domain
-                logger.debug(
-                    f"{source['url']} loaded but does not mention {model_number}; "
-                    f"treating as no-match"
-                )
-                continue
-
-            # A Google/web result IS already a product detail page, not a search
-            # listing, so it is used directly once it names the model -- there is
-            # no further page to follow to. For a `web` (unvetted) source, brand
-            # identity is still required so a wrong-product page cannot slip in.
-            if source.get("is_direct") == "true":
-                # A direct product page must identify as this exact model (title/
-                # slug), guarding the IPRA/IPGA suffix trap on web results too.
-                if not model_matches_identity(model_number, result.url or source["url"],
-                                              result.candidate_titles):
-                    logger.info(
-                        f"Rejected direct result {source['url']}: title/URL is a different "
-                        f"model variant than {model_number}."
-                    )
-                    continue
-                if (source["source_type"] == "web"
-                        and not brand_matches_identity(brand_name, result.url or source["url"],
-                                                       result.candidate_titles)):
-                    logger.info(
-                        f"Rejected direct web result {source['url']}: names {model_number} "
-                        f"but does not identify as '{brand_name}'."
-                    )
-                    continue
-                detail = result
-            else:
-                # A search hit is only a lead. The detail page is the evidence --
-                # see _follow_to_detail_page for why a listing alone is rejected.
-                detail = await _follow_to_detail_page(
-                    result,
-                    model_number,
-                    brand_name=brand_name,
-                    # A path scope is recorded only for hosts that serve more than
-                    # one brand, so its presence is exactly the condition under
-                    # which brand identity has to be proven.
-                    require_brand_identity=bool(source.get("scope_path")),
-                )
-            if detail is None:
+            # THE MAIN STOP. An official source plus one cross-check already confirms
+            # everything that is ever going to be confirmed, so the rest of the list
+            # cannot change a single output -- it can only cost time. On the measured
+            # run this fires at ~9s instead of running to the attempt ceiling at 137s.
+            if _corroboration_satisfied(scraped_data):
                 logger.info(
-                    f"{source['url']} matched the query but no product page for "
-                    f"{model_number} was found on {domain}; discarding this source"
+                    f"Corroboration satisfied for {brand_name} {model_number} with "
+                    f"{len(scraped_data)} source(s) including an official one after "
+                    f"{attempted} attempt(s); further sources cannot change the result."
                 )
-                brand_token = re.split(r"[^a-zA-Z0-9]", brand_name)[0] if brand_name else brand_name
-                if result.content and search_result_mentions_product(result.content, brand_token):
-                    logger.info(
-                        f"Search page on {domain} confirmed working (mentions '{brand_token}') "
-                        f"but '{model_number}' detail page not found. Bailing out of remaining candidate patterns."
+                break
+
+            # Diminishing returns. Covers the case the rule above cannot: a product
+            # with no official source available, where the old code would still walk
+            # the entire configured list one dead domain at a time.
+            if consecutive_empty_domains >= MAX_CONSECUTIVE_EMPTY_DOMAINS:
+                logger.info(
+                    f"{consecutive_empty_domains} consecutive domains yielded nothing for "
+                    f"{brand_name} {model_number}; stopping with {len(scraped_data)} source(s) "
+                    f"rather than walking the remaining {len(by_domain) - attempted} domain(s)."
+                )
+                break
+
+            # Stop once enough independent sources are in hand. With 20+ configured
+            # retailers, scraping every one would take many minutes per product;
+            # corroboration only needs a handful of agreeing sources, and domains are
+            # tried in trust order (official, then trusted, then web), so the first
+            # few are the most authoritative.
+            if len(scraped_data) >= MAX_SOURCES_FOR_CORROBORATION:
+                logger.info(
+                    f"Collected {len(scraped_data)} sources for {brand_name} {model_number}; "
+                    f"stopping early (cap {MAX_SOURCES_FOR_CORROBORATION})."
+                )
+                break
+            if attempted >= max_attempts:
+                logger.info(
+                    f"Pass {pass_num} hit its {max_attempts}-attempt ceiling for {brand_name} "
+                    f"{model_number} with {len(scraped_data)} source(s); ending this pass."
+                )
+                break
+            sources_before_domain = len(scraped_data)
+            for source in candidates:
+                attempted += 1
+                try:
+                    result = await smart_fetch(
+                        source["url"], model_number, allow_tier2=allow_tier2
                     )
-                    break
-                continue
+                except Exception as e:
+                    logger.warning(f"Scrape failed for {source['url']}: {e}")
+                    continue
 
-            # Titles from BOTH pages: the listing shows how this seller names
-            # the model alongside competitors, the detail page gives its full
-            # title. More independent titles means better corroboration.
-            scraped_data.append({
-                "url": detail.url,
-                "source_type": source["source_type"],
-                "content": detail.content,
-                "candidate_titles": list(dict.fromkeys(
-                    result.candidate_titles + detail.candidate_titles
-                )),
-            })
+                if not result.success or not result.content:
+                    continue
 
-            matched_template = template_of_url(domain, source["url"], brand_name, model_number)
-            if matched_template:
-                await remember_working_template(domain, matched_template)
-            break  # this domain answered; move to the next one
+                # An anti-bot challenge loads with content but is not the product. Flag
+                # it as a block (not a no-match) so the escalation is actionable.
+                if is_block_page(result.content):
+                    blocked = True
+                    logger.warning(
+                        f"{source['url']} returned an anti-bot/block page (Cloudflare etc.); "
+                        f"skipping. Operator can paste Details to bypass."
+                    )
+                    continue
 
-        # Feeds the diminishing-returns stop above. Counted per DOMAIN, not per
-        # URL pattern: one domain legitimately costs several attempts while its
-        # platform is identified, and counting those as separate misses would
-        # abandon the list far too early.
-        if len(scraped_data) > sources_before_domain:
-            consecutive_empty_domains = 0
-        else:
-            consecutive_empty_domains += 1
+                if not search_result_mentions_product(result.content, model_number):
+                    # Domain bail-out: if the search page loaded successfully AND
+                    # mentions the brand name (proof the search engine is working on
+                    # this domain, not just returning an error/empty page), but does
+                    # NOT mention our model number, this domain has confirmed it does
+                    # not stock this product. Skip all remaining URL patterns for it.
+                    #
+                    # WHY THIS IS SAFE: we only bail when the brand appears in content,
+                    # ruling out the case where a pattern returned the wrong platform's
+                    # "no results" page (which would not mention the brand at all).
+                    # This preserves the original multi-pattern logic for all cases
+                    # where the search page is genuinely empty or wrong-platform.
+                    # Use only the FIRST alphanumeric token of the brand name for
+                    # the content check. Splitting on any separator (space, hyphen,
+                    # underscore) handles all real-world brand name formats:
+                    #   "WestPoint Pakistan" -> "WestPoint"
+                    #   "WestPoint-Pakistan" -> "WestPoint"
+                    #   "Kenwood"            -> "Kenwood"
+                    brand_token = re.split(r"[^a-zA-Z0-9]", brand_name)[0] if brand_name else brand_name
+                    if search_result_mentions_product(result.content, brand_token):
+                        logger.info(
+                            f"Domain {domain} (pass {pass_num}): search works (mentions "
+                            f"'{brand_name}') but '{model_number}' is not stocked there. "
+                            f"Skipping {len(candidates) - candidates.index(source) - 1} "
+                            f"remaining URL pattern(s) for this domain."
+                        )
+                        # Final ONLY when a browser rendered the page. In pass 1 the
+                        # brand can appear in an unrendered shell's nav menu while the
+                        # catalogue never loaded, so this is not yet proof of anything
+                        # -- settling here is what silently excluded JS sites from
+                        # pass 2 entirely.
+                        if allow_tier2:
+                            settled_domains.add(domain)
+                        break  # skip remaining candidates for this domain, this pass
+                    logger.debug(
+                        f"{source['url']} loaded but does not mention {model_number}; "
+                        f"treating as no-match"
+                    )
+                    continue
+
+                # A Google/web result IS already a product detail page, not a search
+                # listing, so it is used directly once it names the model -- there is
+                # no further page to follow to. For a `web` (unvetted) source, brand
+                # identity is still required so a wrong-product page cannot slip in.
+                if source.get("is_direct") == "true":
+                    # A direct product page must identify as this exact model (title/
+                    # slug), guarding the IPRA/IPGA suffix trap on web results too.
+                    if not model_matches_identity(model_number, result.url or source["url"],
+                                                  result.candidate_titles):
+                        logger.info(
+                            f"Rejected direct result {source['url']}: title/URL is a different "
+                            f"model variant than {model_number}."
+                        )
+                        continue
+                    if (source["source_type"] == "web"
+                            and not brand_matches_identity(brand_name, result.url or source["url"],
+                                                           result.candidate_titles)):
+                        logger.info(
+                            f"Rejected direct web result {source['url']}: names {model_number} "
+                            f"but does not identify as '{brand_name}'."
+                        )
+                        continue
+                    detail = result
+                else:
+                    # A search hit is only a lead. The detail page is the evidence --
+                    # see _follow_to_detail_page for why a listing alone is rejected.
+                    detail = await _follow_to_detail_page(
+                        result,
+                        model_number,
+                        brand_name=brand_name,
+                        # A path scope is recorded only for hosts that serve more than
+                        # one brand, so its presence is exactly the condition under
+                        # which brand identity has to be proven.
+                        require_brand_identity=bool(source.get("scope_path")),
+                        allow_tier2=allow_tier2,
+                    )
+                if detail is None:
+                    logger.info(
+                        f"{source['url']} matched the query but no product page for "
+                        f"{model_number} was found on {domain}; discarding this source"
+                    )
+                    brand_token = re.split(r"[^a-zA-Z0-9]", brand_name)[0] if brand_name else brand_name
+                    if result.content and search_result_mentions_product(result.content, brand_token):
+                        logger.info(
+                            f"Search page on {domain} confirmed working (mentions '{brand_token}') "
+                            f"but '{model_number}' detail page not found. Bailing out of remaining candidate patterns."
+                        )
+                        # Same rule as the bail-out above: only a rendered page
+                        # settles a domain. Without this guard, a pass-1 shell that
+                        # merely lists brand names in its nav retires the domain
+                        # before the browser ever sees it.
+                        if allow_tier2:
+                            settled_domains.add(domain)
+                        break
+                    continue
+
+                # Titles from BOTH pages: the listing shows how this seller names
+                # the model alongside competitors, the detail page gives its full
+                # title. More independent titles means better corroboration.
+                scraped_data.append({
+                    "url": detail.url,
+                    "source_type": source["source_type"],
+                    "content": detail.content,
+                    "candidate_titles": list(dict.fromkeys(
+                        result.candidate_titles + detail.candidate_titles
+                    )),
+                })
+
+                matched_template = template_of_url(domain, source["url"], brand_name, model_number)
+                if matched_template:
+                    await remember_working_template(domain, matched_template)
+
+                # This domain delivered -- never revisit it in pass 2.
+                settled_domains.add(domain)
+                break  # this domain answered; move to the next one
+
+            # Feeds the diminishing-returns stop above. Counted per DOMAIN, not per
+            # URL pattern: one domain legitimately costs several attempts while its
+            # platform is identified, and counting those as separate misses would
+            # abandon the list far too early.
+            if len(scraped_data) > sources_before_domain:
+                consecutive_empty_domains = 0
+            else:
+                consecutive_empty_domains += 1
 
     if not scraped_data:
         if blocked:

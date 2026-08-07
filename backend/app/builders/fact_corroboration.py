@@ -25,12 +25,14 @@ Trust order, and what counts as confirmed:
 A single unverified web page is never enough on its own; that is the whole point.
 """
 import re
-from typing import Literal, Optional, Protocol
+from typing import Literal, Protocol
 from urllib.parse import urlparse
 
 from pydantic import BaseModel
 
-ResolutionStatus = Literal["confirmed", "corroborated", "single_source", "conflict", "unknown"]
+ResolutionStatus = Literal[
+    "confirmed", "corroborated", "single_source", "conflict", "unknown", "inferred"
+]
 
 # Source tiers, most authoritative first. Mirrors the discovery tiers.
 _TIER_RANK = {"official": 3, "trusted_secondary": 2, "web": 1, "user_estimate": 0}
@@ -41,34 +43,56 @@ _UNKNOWN = "UNKNOWN"
 class _CitationLike(Protocol):
     field_name: str
     value: str
-    source_url: Optional[str]
+    source_url: str | None
     source_type: str
     confidence: str
 
 
 class FieldResolution(BaseModel):
     field_name: str
-    value: Optional[str]           # chosen ORIGINAL wording; None when unknown/conflict
+    value: str | None           # chosen ORIGINAL wording; None when unknown/conflict
     status: ResolutionStatus
     supporting_domains: list[str] = []
     conflicting_values: list[str] = []   # populated only when status == "conflict"
 
     @property
     def is_confirmed(self) -> bool:
-        """A value safe to use downstream: an official source or real corroboration."""
+        """A value safe to use downstream: an official source or real corroboration.
+
+        `inferred` is deliberately excluded. Every guard in the pipeline keys off
+        this property, so letting a deduction satisfy it would quietly grant an
+        inference the standing of a verified fact -- the exact laundering this
+        design exists to prevent. Inferred values reach the CSV through
+        `is_usable`, which is explicit about what it is admitting.
+        """
         return self.status in ("confirmed", "corroborated")
+
+    @property
+    def is_inferred(self) -> bool:
+        """Deduced from described features rather than stated by a source."""
+        return self.status == "inferred"
+
+    @property
+    def is_usable(self) -> bool:
+        """Publishable: either verified, or a permitted inference.
+
+        Kept separate from `is_confirmed` so that every caller has to decide,
+        in writing, whether an inference is acceptable for its purpose. Warranty
+        checks and price references must not use this; the spec table may.
+        """
+        return self.is_confirmed or self.is_inferred
 
 
 # --- Value normalisation ----------------------------------------------------
 
 # Longer phrases first so "cubic feet" is folded before a stray "ft".
 _UNIT_REPLACEMENTS: tuple[tuple[re.Pattern, str], ...] = (
-    (re.compile(r"\bcubic\s*feet\b|\bcu\.?\s*ft\.?\b|\bcuft\b", re.I), "cuft"),
-    (re.compile(r"\blit(?:re|er)s?\b", re.I), "l"),
-    (re.compile(r"\bkilograms?\b|\bkgs?\b", re.I), "kg"),
-    (re.compile(r"\btons?\b", re.I), "ton"),
-    (re.compile(r"\bwatts?\b", re.I), "w"),
-    (re.compile(r"\binch(?:es)?\b", re.I), "in"),
+    (re.compile(r"\bcubic\s*feet\b|\bcu\.?\s*ft\.?\b|\bcuft\b", re.IGNORECASE), "cuft"),
+    (re.compile(r"\blit(?:re|er)s?\b", re.IGNORECASE), "l"),
+    (re.compile(r"\bkilograms?\b|\bkgs?\b", re.IGNORECASE), "kg"),
+    (re.compile(r"\btons?\b", re.IGNORECASE), "ton"),
+    (re.compile(r"\bwatts?\b", re.IGNORECASE), "w"),
+    (re.compile(r"\binch(?:es)?\b", re.IGNORECASE), "in"),
 )
 
 _DECIMAL = re.compile(r"\d+\.\d+")
@@ -121,11 +145,11 @@ def normalize_value(value: str) -> str:
     return _fold_volume_units(text)
 
 
-def _domain(url: Optional[str]) -> str:
+def _domain(url: str | None) -> str:
     if not url:
         return ""
     host = urlparse(url if "//" in url else f"//{url}").netloc.lower()
-    return host[4:] if host.startswith("www.") else host
+    return host.removeprefix("www.")
 
 
 class _Group:
@@ -167,6 +191,26 @@ def resolve_field(field_name: str, citations: list[_CitationLike]) -> FieldResol
         and (c.value or "").strip().upper() != _UNKNOWN
     ]
     if not relevant:
+        # No source STATES the value. Fall back to a deduction if one was made --
+        # but only after confirming nothing stated it, so a real citation always
+        # wins over an inference rather than competing with it.
+        inferred = [
+            c for c in citations
+            if c.field_name == field_name
+            and c.confidence == "inferred"
+            and (c.value or "").strip().upper() != _UNKNOWN
+        ]
+        if inferred:
+            # Inferences are not corroborated against each other: two models
+            # deducing the same thing from the same text is not independent
+            # agreement. The first is used, and the quote travels with it.
+            first = inferred[0]
+            return FieldResolution(
+                field_name=field_name,
+                value=first.value,
+                status="inferred",
+                supporting_domains=[_domain(first.source_url) or "inferred"],
+            )
         return FieldResolution(field_name=field_name, value=None, status="unknown")
 
     groups: dict[str, _Group] = {}

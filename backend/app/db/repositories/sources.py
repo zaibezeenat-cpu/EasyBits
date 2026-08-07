@@ -1,8 +1,9 @@
-from typing import List, Dict
+
 from app.db.supabase_client import get_supabase
 
+
 class SourcesRepository:
-    async def get_brand_aliases(self, brand_name: str) -> List[str]:
+    async def get_brand_aliases(self, brand_name: str) -> list[str]:
         db = await get_supabase()
         # First find brand_id
         brand_resp = await db.table("brands").select("id").eq("name", brand_name).execute()
@@ -13,7 +14,7 @@ class SourcesRepository:
         alias_resp = await db.table("brand_domain_aliases").select("official_domain").eq("brand_id", brand_id).eq("is_active", True).execute()
         return [row["official_domain"].lower() for row in alias_resp.data]
 
-    async def list_brand_domains(self) -> Dict[str, str]:
+    async def list_brand_domains(self) -> dict[str, str]:
         """
         Every brand's official domain, keyed by brand_id.
 
@@ -28,7 +29,7 @@ class SourcesRepository:
         ).eq("is_active", True).execute()
         return {row["brand_id"]: row["official_domain"] for row in response.data}
 
-    async def set_brand_domain(self, brand_id: str, official_domain: str) -> Dict:
+    async def set_brand_domain(self, brand_id: str, official_domain: str) -> dict:
         """
         Sets (or replaces) a brand's official domain.
 
@@ -47,7 +48,7 @@ class SourcesRepository:
         db = await get_supabase()
         await db.table("brand_domain_aliases").delete().eq("brand_id", brand_id).execute()
 
-    async def set_trusted_secondary_source_priority(self, source_id: str, priority: int) -> Dict:
+    async def set_trusted_secondary_source_priority(self, source_id: str, priority: int) -> dict:
         db = await get_supabase()
         response = await db.table("trusted_secondary_sources").update(
             {"priority": priority}
@@ -56,24 +57,24 @@ class SourcesRepository:
             raise ValueError("Source not found")
         return response.data[0]
 
-    async def get_active_trusted_secondary_sources(self) -> List[Dict]:
+    async def get_active_trusted_secondary_sources(self) -> list[dict]:
         db = await get_supabase()
         response = await db.table("trusted_secondary_sources").select("*").eq("is_active", True).order("priority").execute()
         return response.data
 
-    async def list_all_trusted_secondary_sources(self) -> List[Dict]:
+    async def list_all_trusted_secondary_sources(self) -> list[dict]:
         db = await get_supabase()
         response = await db.table("trusted_secondary_sources").select("*").order("priority").execute()
         return response.data
 
-    async def create_trusted_secondary_source(self, domain: str, label: str, priority: int = 0) -> Dict:
+    async def create_trusted_secondary_source(self, domain: str, label: str, priority: int = 0) -> dict:
         db = await get_supabase()
         response = await db.table("trusted_secondary_sources").insert(
             {"domain": domain, "label": label, "priority": priority}
         ).execute()
         return response.data[0]
 
-    async def set_trusted_secondary_source_active(self, source_id: str, is_active: bool) -> Dict:
+    async def set_trusted_secondary_source_active(self, source_id: str, is_active: bool) -> dict:
         db = await get_supabase()
         response = await db.table("trusted_secondary_sources").update(
             {"is_active": is_active}

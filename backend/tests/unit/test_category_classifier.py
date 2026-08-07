@@ -4,8 +4,9 @@ name-matching finds nothing. It MUST pick verbatim from the owner's real categor
 list and never invent one: a wrong/invented category places the product wrongly in
 live WooCommerce, so anything outside the list resolves to None (-> Manual Review).
 """
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from app.builders import category_classifier as cc
 from app.builders.category_classifier import CategoryChoice, llm_pick_category

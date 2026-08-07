@@ -8,6 +8,7 @@ business is then obliged to honour. Publishing "10 years" when the real cover is
 """
 
 import pytest
+
 from app.builders.warranty_verifier import (
     build_source_text,
     extract_durations,
@@ -18,7 +19,7 @@ from app.builders.warranty_verifier import (
 
 async def _no_setting(_key):
     """Stand-in for settings_repo.get_setting so unit tests never touch Supabase."""
-    return None
+    return
 
 
 # --- Duration extraction ----------------------------------------------------
@@ -132,8 +133,8 @@ async def test_retailer_warranty_difference_does_not_escalate(monkeypatch):
             brand_name="HAIER",
             category_name="Refrigerator",
             product_type="Refrigerator",
-            regular_price=Decimal("90000"),
-            sale_price=Decimal("74999"),
+            regular_price=Decimal(90000),
+            sale_price=Decimal(74999),
             warranty_override="Compressor: 10 Year * Other part: 1 Year",
         ),
     )
@@ -284,8 +285,8 @@ async def test_warranty_mismatch_routes_product_to_manual_review(monkeypatch):
             brand_name="Kenwood",
             category_name="Air conditioner",
             product_type="Air conditioner",
-            regular_price=Decimal("150000"),
-            sale_price=Decimal("139999"),
+            regular_price=Decimal(150000),
+            sale_price=Decimal(139999),
             warranty_override="10 Years Compressor Warranty; 5 Years All Parts Warranty",
         ),
     )

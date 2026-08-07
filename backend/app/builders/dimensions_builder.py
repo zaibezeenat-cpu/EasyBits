@@ -1,6 +1,8 @@
 import re
-from app.models.extraction import ExtractionResult
+
 from app.models.dimensions import DimensionsResult
+from app.models.extraction import ExtractionResult
+
 
 def build_dimensions(extraction: ExtractionResult) -> DimensionsResult:
     """

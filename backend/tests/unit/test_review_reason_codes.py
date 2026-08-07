@@ -10,12 +10,11 @@ These tests would have caught that before it reached a real run.
 """
 import re
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from app.models.failure import FailureCategory
-from typing import get_args
-
 
 _MIGRATIONS = Path(__file__).resolve().parents[3] / "supabase" / "migrations"
 _SCHEMA = _MIGRATIONS / "20260721000000_complete_schema.sql"
@@ -24,7 +23,7 @@ _SCHEMA = _MIGRATIONS / "20260721000000_complete_schema.sql"
 def _enum_values() -> set[str]:
     """Every value the manual_review_reason_code enum has across ALL migrations."""
     text = _SCHEMA.read_text(encoding="utf-8")
-    block = re.search(r"CREATE TYPE manual_review_reason_code AS ENUM\s*\((.*?)\)", text, re.S)
+    block = re.search(r"CREATE TYPE manual_review_reason_code AS ENUM\s*\((.*?)\)", text, re.DOTALL)
     assert block, "enum definition not found in schema migration"
     values = set(re.findall(r"'([a-z_]+)'", block.group(1)))
 

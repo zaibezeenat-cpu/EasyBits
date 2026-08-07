@@ -1,5 +1,7 @@
 from datetime import datetime
+
 from app.db.supabase_client import get_supabase
+
 
 class LLMUsageRepository:
     def __init__(self):

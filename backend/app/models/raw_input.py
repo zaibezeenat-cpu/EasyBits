@@ -1,6 +1,8 @@
-from pydantic import BaseModel, field_validator
 from decimal import Decimal
-from typing import Literal, Optional
+from typing import Any, Literal
+
+from pydantic import BaseModel, field_validator
+
 
 class RawProductInput(BaseModel):
     sku: str
@@ -11,20 +13,24 @@ class RawProductInput(BaseModel):
     regular_price: Decimal
     sale_price: Decimal
     in_stock: bool = True                        # closes #14 — surfaced by StockStatusToggle.tsx
-    warranty_override: Optional[str] = None      # phase1.md §5.5's per-product override
+    warranty_override: str | None = None      # phase1.md §5.5's per-product override
     template_choice: Literal["A", "B"] = "A"
 
     # Operator-provided source (the real Westpoint sheet's "Website Link" + "Details").
     # Both optional: when given, the pipeline uses them as an authoritative source instead
     # of (or, in augment mode, in addition to) search-based discovery. When absent, discovery
     # runs exactly as before -- nothing regresses for products without a link.
-    official_url: Optional[str] = None
-    source_details: Optional[str] = None
+    official_url: str | None = None
+    source_details: str | None = None
 
     # The sheet's "Existing ID": when present the product is regenerated with the new logic and
     # the CSV's ID column is filled so WooCommerce updates that product in place (no duplicate).
     # Absent -> a brand-new product is created. Auto-detected; no separate mode to manage.
-    existing_id: Optional[str] = None
+    existing_id: str | None = None
+
+    # Holds all non-core columns from the input CSV (e.g., "Images", "Tax class") to pass through
+    # to the final CSV output. See csv_assembler.py for overlay logic.
+    passthrough_columns: dict[str, Any] | None = None
 
     @field_validator("existing_id", mode="before")
     @classmethod

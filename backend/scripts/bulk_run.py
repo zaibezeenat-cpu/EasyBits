@@ -30,17 +30,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.builders.category_classifier import llm_pick_category  # noqa: E402
-from app.builders.csv_assembler import generate_csv_file  # noqa: E402
-from app.builders.input_adapter import parse_sheet_row  # noqa: E402
-from app.api.routes.products import build_product_row  # noqa: E402
-from app.db.repositories.batches import batches_repo  # noqa: E402
-from app.db.repositories.brands import brands_repo  # noqa: E402
-from app.db.repositories.categories import categories_repo  # noqa: E402
-from app.db.repositories.products import products_repo  # noqa: E402
-from app.db.repositories.settings import settings_repo  # noqa: E402
-from app.graph.batch_processor import BatchProcessor  # noqa: E402
-from app.models.raw_input import RawProductInput  # noqa: E402
+from app.api.routes.products import build_product_row
+from app.builders.category_classifier import llm_pick_category
+from app.builders.csv_assembler import generate_csv_file
+from app.builders.input_adapter import parse_sheet_row
+from app.db.repositories.batches import batches_repo
+from app.db.repositories.brands import brands_repo
+from app.db.repositories.categories import categories_repo
+from app.db.repositories.products import products_repo
+from app.db.repositories.settings import settings_repo
+from app.graph.batch_processor import BatchProcessor
+from app.models.raw_input import RawProductInput
 
 
 def _pick(row: dict, *names: str) -> str:
@@ -69,17 +69,36 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
     skipped: list[str] = []
 
     for i, row in enumerate(rows, 1):
-        name = _pick(row, "Name", "Product", "Raw Product Data", "Model")
-        reg = _to_decimal(_pick(row, "Regular", "Regular Price"))
-        sale = _to_decimal(_pick(row, "Sale", "Sale Price"))
+        name = _pick(row, "Name", "Product", "Raw Product Data", "Model", "Title", "post_title", "Official_Model_Title")
+        reg_str = _pick(row, "Regular", "Regular Price", "Regular price", "Price", "Original_PRICE")
+        sale_str = _pick(row, "Sale", "Sale Price", "Sale price", "Sale_Price")
+        
+        reg = _to_decimal(reg_str)
+        sale = _to_decimal(sale_str)
+
+        # One price in the sheet means one price out. It is passed twice so that
+        # assign_prices() -- which decides regular-vs-sale from the VALUES, not the
+        # column headers -- sees them as equal and returns no discount.
+        #
+        # This deliberately does NOT manufacture the missing price. An earlier
+        # version computed `reg = sale * 1.20` so the storefront would always show
+        # a discount, but that invents a price the product was never sold at.
+        # Beyond being false, fake "was" pricing breaches consumer-protection rules
+        # and gets listings disapproved by Google Merchant Center and Facebook
+        # Catalog. If a real markup exists it belongs in the source sheet.
+        if reg is None and sale is not None:
+            reg = sale
+        elif sale is None and reg is not None:
+            sale = reg
+
         if not name or reg is None or sale is None:
             skipped.append(f"row {i}: missing name or a price ({name!r})")
             continue
 
         parsed = parse_sheet_row(
             product_name=name, price_a=reg, price_b=sale,
-            warranty_text=_pick(row, "Warranty"),
-            status_text=_pick(row, "Status"),
+            warranty_text=_pick(row, "Warranty", "Warranty Details"),
+            status_text=_pick(row, "Status", "Template", "Template Choice"),
             known_brands=known_brands, known_categories=known_categories,
             category_parents=category_parents,
         )
@@ -87,7 +106,7 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
         # Brand: prefer an explicit "Brand" column (matched to the exact taxonomy
         # casing), else the brand inferred from the product name.
         brand_name = parsed.brand_name
-        brand_col = _pick(row, "Brand")
+        brand_col = _pick(row, "Brand", "Vendor", "Brand Name", "pa_brand")
         if brand_col:
             brand_name = next((b for b in known_brands if b.lower() == brand_col.lower()), None)
             if brand_name is None:
@@ -97,6 +116,12 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
         category = parsed.category_name
         if category is None:  # deterministic match failed -> LLM picks from the list
             category = await llm_pick_category(name, known_categories)
+
+        explicit_sku = _pick(row, "SKU")
+        if explicit_sku:
+            parsed.sku = explicit_sku
+            if not parsed.model_number:
+                parsed.model_number = explicit_sku
 
         if not brand_name or not category or not parsed.sku:
             missing = []
@@ -109,7 +134,7 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
             skipped.append(f"row {i}: could not resolve {', '.join(missing)} for {name!r}")
             continue
 
-        existing_id = _pick(row, "Existing ID", "Existing Id", "ID")
+        existing_id = _pick(row, "Existing ID", "Existing Id", "ID", "id")
         inputs.append(RawProductInput(
             sku=parsed.sku, model_number=parsed.model_number,
             brand_name=brand_name, category_name=category,
@@ -117,9 +142,10 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
             regular_price=parsed.regular_price, sale_price=parsed.sale_price,
             warranty_override=parsed.warranty_phrase,
             template_choice=parsed.template_choice or "B",
-            official_url=_pick(row, "Website Link", "Link", "URL") or None,
-            source_details=_pick(row, "Details") or None,
+            official_url=_pick(row, "Website Link", "Link", "URL", "Product_URL", "External URL") or None,
+            source_details=_pick(row, "Details", "Description", "Short description", "Clean_Description_Text", "Original_Item Description") or None,
             existing_id=existing_id or None,
+            passthrough_columns=dict(row),  # Capture entire row for passthrough overlay
         ))
 
     return inputs, skipped
@@ -156,7 +182,7 @@ async def run(input_path: str, output_path: str, strict: bool) -> None:
     with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
         f.write(generate_csv_file([p.csv_row for p in ready]))
 
-    print(f"\n===== DONE =====")
+    print("\n===== DONE =====")
     print(f"READY  -> {len(ready)} products written to {output_path}")
     print(f"REVIEW -> {len(review)} products need attention:")
     for p in review:
@@ -165,6 +191,52 @@ async def run(input_path: str, output_path: str, strict: bool) -> None:
         if isinstance(p.failure_detail, dict):
             detail = str(p.failure_detail.get("detail", ""))[:120]
         print(f"  {p.sku}: {reason} {detail}")
+
+    _print_inferred_report(ready)
+
+
+def _print_inferred_report(products: list) -> None:
+    """Lists every value that was DEDUCED rather than read from a source.
+
+    This is the operator's review surface. Inferred values ship in the CSV
+    unmarked -- a "(based on features)" suffix on a live storefront reads badly to
+    customers -- so without this report a deduction would be invisible. There is
+    no usable admin UI, which makes the terminal the only place a human sees them
+    before the CSV is uploaded.
+
+    Each line carries the quote the deduction rests on, so it can be judged
+    without opening the source page.
+
+    Args:
+        products: The products that reached READY, i.e. the ones whose values are
+            about to be imported.
+    """
+    lines: list[tuple[str, str, str, str]] = []
+    for p in products:
+        extraction = p.extraction_result or {}
+        for citation in extraction.get("citations", []):
+            if citation.get("confidence") != "inferred":
+                continue
+            lines.append((
+                p.sku,
+                citation.get("field_name", "?"),
+                citation.get("value", "?"),
+                (citation.get("exact_quote") or "").strip(),
+            ))
+
+    if not lines:
+        return
+
+    skus = {sku for sku, *_ in lines}
+    print(
+        f"\nINFERRED VALUES ({len(skus)} product(s), {len(lines)} value(s)) "
+        f"— deduced from described features, not stated by any source:"
+    )
+    for sku, field, value, quote in lines:
+        print(f"  {sku:<16} {field} = {value!r}")
+        if quote:
+            print(f"  {'':<16}   from: \"{quote[:100]}\"")
+    print("  Worth a glance before uploading — these are the only guessed values.")
 
 
 def main() -> None:

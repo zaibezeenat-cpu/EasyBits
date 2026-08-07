@@ -1,10 +1,12 @@
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
+
 import pytest
+
 from app.graph.nodes import intake_triage
 from app.graph.state import PipelineState
 from app.models.raw_input import RawProductInput
-from uuid import uuid4
-from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _mock_brand(name: str) -> MagicMock:
@@ -23,8 +25,8 @@ async def test_intake_triage_simple_product():
         brand_name="B1",
         category_name="Microwave Oven",
         product_type="Microwave",
-        regular_price=Decimal("100"),
-        sale_price=Decimal("90")
+        regular_price=Decimal(100),
+        sale_price=Decimal(90)
     )
     state = PipelineState(
         product_id=uuid4(),
@@ -60,8 +62,8 @@ async def test_intake_triage_variant_detection():
         brand_name="B1",
         category_name="Microwave Oven",
         product_type="Microwave",
-        regular_price=Decimal("100"),
-        sale_price=Decimal("90")
+        regular_price=Decimal(100),
+        sale_price=Decimal(90)
     )
     state = PipelineState(
         product_id=uuid4(),
@@ -98,8 +100,8 @@ async def test_intake_triage_brand_casing_mismatch_blocks():
         brand_name="dawlance",
         category_name="Microwave Oven",
         product_type="Microwave",
-        regular_price=Decimal("100"),
-        sale_price=Decimal("90")
+        regular_price=Decimal(100),
+        sale_price=Decimal(90)
     )
     state = PipelineState(
         product_id=uuid4(),

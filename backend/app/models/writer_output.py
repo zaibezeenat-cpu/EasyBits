@@ -1,5 +1,6 @@
 from pydantic import BaseModel, field_validator
 
+
 class FAQPair(BaseModel):
     question: str
     answer: str
@@ -49,6 +50,6 @@ class WriterOutput(BaseModel):
             raise ValueError(f"WriterOutput.lsi_keywords must have 2 to 3 entries, got {len(v)}")
         if any(not k.strip() for k in v):
             raise ValueError("WriterOutput.lsi_keywords entries must not be empty")
-        if len(set(k.strip().lower() for k in v)) != len(v):
+        if len({k.strip().lower() for k in v}) != len(v):
             raise ValueError("WriterOutput.lsi_keywords must be distinct (no duplicates)")
         return v

@@ -19,7 +19,6 @@ from app.scraping.source_discovery import (
     template_of_url,
 )
 
-
 # --- Helpers ----------------------------------------------------------------
 
 def test_normalise_domain_strips_scheme_and_www():

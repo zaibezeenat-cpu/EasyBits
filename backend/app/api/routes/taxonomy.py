@@ -1,11 +1,12 @@
+from uuid import UUID
+
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
-from typing import List, Optional
-from uuid import UUID
-from app.models.taxonomy import Brand, Category
+
 from app.db.repositories.audit import audit_repo
 from app.db.repositories.brands import brands_repo
 from app.db.repositories.categories import categories_repo
+from app.models.taxonomy import Brand, Category
 
 router = APIRouter()
 
@@ -65,25 +66,25 @@ class BrandCreate(BaseModel):
 
 
 class BrandUpdate(BaseModel):
-    casing_confirmed: Optional[bool] = None
-    is_active: Optional[bool] = None
+    casing_confirmed: bool | None = None
+    is_active: bool | None = None
     # Display casing for the product title only (e.g. "Haier"). Send "" to clear.
-    display_name: Optional[str] = Field(default=None, max_length=120)
+    display_name: str | None = Field(default=None, max_length=120)
 
 
 class CategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    parent_id: Optional[UUID] = None
+    parent_id: UUID | None = None
 
 
 class CategoryUpdate(BaseModel):
-    parent_id: Optional[UUID] = None
-    is_active: Optional[bool] = None
-    needs_confirmation: Optional[bool] = None
-    notes: Optional[str] = None
+    parent_id: UUID | None = None
+    is_active: bool | None = None
+    needs_confirmation: bool | None = None
+    notes: str | None = None
 
 
-@router.get("/brands", response_model=List[Brand])
+@router.get("/brands", response_model=list[Brand])
 async def list_brands():
     return await brands_repo.list()
 
@@ -117,7 +118,7 @@ async def update_brand(brand_id: UUID, payload: BrandUpdate):
     return updated
 
 
-@router.get("/categories", response_model=List[Category])
+@router.get("/categories", response_model=list[Category])
 async def list_categories():
     return await categories_repo.list()
 

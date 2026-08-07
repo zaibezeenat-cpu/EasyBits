@@ -1,6 +1,7 @@
-﻿from pydantic import Field, AliasChoices
+﻿
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
+
 
 class Settings(BaseSettings):
     # Supabase — only the service-role key is ever used (backend-only access,
@@ -10,11 +11,11 @@ class Settings(BaseSettings):
 
     # LLM Keys
     GEMINI_API_KEY: str
-    GROQ_API_KEY: Optional[str] = None
-    OPENAI_API_KEY: Optional[str] = None
+    GROQ_API_KEY: str | None = None
+    OPENAI_API_KEY: str | None = None
 
     # Scraping
-    FIRECRAWL_API_KEY: Optional[str] = None
+    FIRECRAWL_API_KEY: str | None = None
 
     # Broad web discovery via Google Programmable Search (Custom Search JSON API).
     # Both optional and unset by default -- when either is missing the search
@@ -22,8 +23,8 @@ class Settings(BaseSettings):
     # sources only). Free tier is 100 queries/day, which fits the owner's volume.
     # GOOGLE_SEARCH_CX is the Programmable Search Engine id, configured to search
     # the entire web.
-    GOOGLE_SEARCH_API_KEY: Optional[str] = None
-    GOOGLE_SEARCH_CX: Optional[str] = None
+    GOOGLE_SEARCH_API_KEY: str | None = None
+    GOOGLE_SEARCH_CX: str | None = None
 
     # Pipeline Logic
     LLM_INTER_PRODUCT_DELAY_SECONDS: float = 1.0
@@ -51,15 +52,15 @@ class Settings(BaseSettings):
 
     # Auth
     APP_AUTH_SECRET: str
-    APP_JWT_SIGNING_KEY: Optional[str] = None
+    APP_JWT_SIGNING_KEY: str | None = None
 
     # Comma-separated list of browser origins allowed to call this API.
     # Defaults to local dev only -- CORS was previously "*", which would let any
     # website drive this API from a logged-in operator's browser.
-    ALLOWED_ORIGINS: Optional[str] = "http://localhost:3000"
+    ALLOWED_ORIGINS: str | None = "http://localhost:3000"
 
     # Monitoring
-    GLITCHTIP_DSN: Optional[str] = None
+    GLITCHTIP_DSN: str | None = None
     ENVIRONMENT: str = Field(default="development", validation_alias=AliasChoices("ENVIRONMENT", "ENV"))
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

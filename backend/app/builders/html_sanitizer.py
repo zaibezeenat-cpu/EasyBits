@@ -1,5 +1,6 @@
 import html
 import re
+from decimal import Decimal, InvalidOperation
 
 # V8.0 Production Lock: any of these wrapper tags immediately around an LSI
 # keyword (or the focus keyword) must be stripped so Rank Math sees plain text.
@@ -12,7 +13,7 @@ def sanitize_html_fields(data: dict) -> dict:
     """
     fields_to_sanitize = ["short_description", "description", "specs_table_html"]
     for field in fields_to_sanitize:
-        if field in data and data[field]:
+        if data.get(field):
             data[field] = html.escape(data[field])
     return data
 
@@ -58,4 +59,56 @@ def strip_newlines_for_csv(text: str) -> str:
     """
     if not text:
         return text
-    return text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    return text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").replace("\t", " ")
+
+
+# Characters that make a spreadsheet treat a cell as a formula rather than text.
+_FORMULA_TRIGGERS = ("=", "+", "-", "@")
+
+
+def _is_plain_number(text: str) -> bool:
+    """True for a value a spreadsheet reads as a number, not a formula.
+
+    `-1` and `+92` are data; `-1+1` and `+cmd|...` are not. Decimal draws the
+    line in the same place the spreadsheet does.
+    """
+    try:
+        Decimal(text)
+    except InvalidOperation:
+        return False
+    return True
+
+
+def neutralize_csv_formula(text: str) -> str:
+    """Prefixes a formula-looking cell with `\'` so it is displayed, not executed.
+
+    Excel and Google Sheets evaluate any cell whose text begins with `=`, `+`,
+    `-` or `@` the moment the file is opened -- no click required. Operator
+    sheets and scraped source text both reach this CSV, so a cell can carry
+    `=cmd|\'/c calc\'!A1` or `=IMPORTXML(...)` without anyone having typed it.
+    The leading apostrophe is the standard force-as-text marker: the
+    spreadsheet consumes it and shows the original string.
+
+    Numbers are deliberately exempt. The row ships `Published: -1` and
+    `Position: 0`; escaping those turns them into text and breaks every
+    WooCommerce import -- an over-broad guard would be the more damaging bug.
+
+    Idempotent: an already-prefixed value starts with `\'`, which is not a
+    trigger, so running this twice changes nothing.
+
+    Args:
+        text: The cell value.
+
+    Returns:
+        The value, prefixed with `\'` only if it would otherwise execute.
+    """
+    if not text:
+        return text
+    # Checked on the stripped value: readers differ on whether leading
+    # whitespace disarms a formula, so assume it does not.
+    stripped = text.lstrip()
+    if not stripped.startswith(_FORMULA_TRIGGERS):
+        return text
+    if _is_plain_number(stripped):
+        return text
+    return "'" + text

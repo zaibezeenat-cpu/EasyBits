@@ -16,14 +16,14 @@ from app.models.raw_input import RawProductInput
 
 
 def _state(**overrides) -> PipelineState:
-    base = dict(
-        product_id=uuid4(), batch_id=uuid4(),
-        raw_input=RawProductInput(
+    base = {
+        "product_id": uuid4(), "batch_id": uuid4(),
+        "raw_input": RawProductInput(
             sku="KLU-12B03S", model_number="KLU-12B03S", brand_name="Kenwood",
             category_name="Air conditioner", product_type="Air conditioner",
-            regular_price=Decimal("150000"), sale_price=Decimal("139999"),
+            regular_price=Decimal(150000), sale_price=Decimal(139999),
         ),
-    )
+    }
     base.update(overrides)
     return PipelineState(**base)
 

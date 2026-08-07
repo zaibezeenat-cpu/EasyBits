@@ -12,7 +12,6 @@ import pytest
 from app.core import budget_guard
 from app.core.llm_provider import _extract_token_usage, estimate_cost_usd
 
-
 # --- Cost estimation --------------------------------------------------------
 
 def test_cost_is_computed_from_real_token_counts():

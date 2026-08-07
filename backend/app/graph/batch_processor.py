@@ -1,15 +1,16 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
+
+from app.core.budget_guard import check_budget_ok
+from app.core.config import settings
+from app.db.repositories.batches import batches_repo
+from app.db.repositories.products import products_repo
 from app.graph.pipeline import pipeline
 from app.graph.state import PipelineState
-from app.core.config import settings
-from app.core.budget_guard import check_budget_ok
 from app.scraping.playwright_client import shutdown_browser
 from app.sse import sse_manager
-from app.db.repositories.products import products_repo
-from app.db.repositories.batches import batches_repo
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ def _final_state_to_product_update(final_state: PipelineState) -> dict:
         update["failure_reason"] = final_state.failure.category
         update["failure_detail"] = {"detail": final_state.failure.detail}
     if status == "ready_for_qa":
-        update["ready_for_qa_at"] = datetime.now(timezone.utc).isoformat()
+        update["ready_for_qa_at"] = datetime.now(UTC).isoformat()
 
     return update
 

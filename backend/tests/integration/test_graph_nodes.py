@@ -1,13 +1,14 @@
-﻿import pytest
+﻿from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.graph.nodes import duplicate_sku_guard_node, extractor_node
 from uuid import uuid4
 
-from app.graph.state import PipelineState
-from app.models.raw_input import RawProductInput
-from decimal import Decimal
+import pytest
 
+from app.graph.nodes import duplicate_sku_guard_node, extractor_node
+from app.graph.state import PipelineState
 from app.models.failure import FailureInfo
+from app.models.raw_input import RawProductInput
+
 
 @pytest.mark.asyncio
 async def test_duplicate_sku_guard_node_new():
@@ -24,8 +25,8 @@ async def test_duplicate_sku_guard_node_new():
             brand_name="B1",
             category_name="C1",
             product_type="T1",
-            regular_price=Decimal("100"),
-            sale_price=Decimal("90")
+            regular_price=Decimal(100),
+            sale_price=Decimal(90)
         )
     )
     
@@ -48,8 +49,8 @@ async def test_duplicate_sku_guard_node_duplicate():
             brand_name="B1",
             category_name="C1",
             product_type="T1",
-            regular_price=Decimal("100"),
-            sale_price=Decimal("90")
+            regular_price=Decimal(100),
+            sale_price=Decimal(90)
         )
     )
     
@@ -69,8 +70,8 @@ async def test_extractor_node_no_urls():
             brand_name="B1",
             category_name="C1",
             product_type="T1",
-            regular_price=Decimal("100"),
-            sale_price=Decimal("90")
+            regular_price=Decimal(100),
+            sale_price=Decimal(90)
         )
     )
     

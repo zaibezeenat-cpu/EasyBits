@@ -12,8 +12,7 @@ RLS. Deploying that publicly would expose the entire database.
 """
 import hmac
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from fastapi import Depends, HTTPException, status
@@ -62,13 +61,13 @@ def verify_shared_secret(candidate: str) -> bool:
 def create_access_token() -> tuple[str, int]:
     """Returns (jwt, expires_in_seconds)."""
     expires_delta = timedelta(hours=TOKEN_TTL_HOURS)
-    expire_at = datetime.now(timezone.utc) + expires_delta
-    payload = {"sub": "operator", "iat": datetime.now(timezone.utc), "exp": expire_at}
+    expire_at = datetime.now(UTC) + expires_delta
+    payload = {"sub": "operator", "iat": datetime.now(UTC), "exp": expire_at}
     token = jwt.encode(payload, _signing_key(), algorithm=ALGORITHM)
     return token, int(expires_delta.total_seconds())
 
 
-def decode_token(token: str) -> Optional[dict]:
+def decode_token(token: str) -> dict | None:
     """Returns the claims, or None when the token is invalid or expired."""
     try:
         return jwt.decode(token, _signing_key(), algorithms=[ALGORITHM])
@@ -77,7 +76,7 @@ def decode_token(token: str) -> Optional[dict]:
 
 
 async def require_auth(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> dict:
     """FastAPI dependency enforcing a valid bearer token."""
     if credentials is None or not credentials.credentials:

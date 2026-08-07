@@ -38,10 +38,24 @@ Template: {template_type}   <!-- "A" = 3 image/feature blocks, "B" = 1 text sect
    this — so give it a strong, specific angle and nothing else.
 
 4. lsi_keywords: generate exactly 2 to 3 DISTINCT LSI (semantically related) keywords for this
-   product — real search phrases a buyer would type (e.g. "Dawlance single door fridge",
-   "energy saving refrigerator", "DSD 4890 price in Pakistan"). These become the secondary
+   product — real search phrases a buyer would type. These become the secondary
    keywords in the Rank Math focus-keyword field. Do NOT exceed 3 LSIs: we already inject 2
    keywords (Primary + Secondary), and Rank Math only scores 5 keywords total; more just dilutes.
+
+   EVERY LSI KEYWORD MUST NAME SOMETHING FROM THE GROUND TRUTH ABOVE — the brand, the model
+   number, or a CONFIRMED specification value. The category alone is not enough.
+       GOOD: "ceramic plate hair straightener"   (the plate material is a confirmed fact)
+             "DSD 4890 price in Pakistan"         (names the model)
+             "Dawlance single door fridge"        (brand + a confirmed door type)
+       BAD:  "beauty tools for hair"              (describes the category, not this product)
+             "hair straightening at home"         (says nothing about this unit)
+             "lightweight hair straightener"      (nothing confirmed it is lightweight —
+                                                   this is an invented claim, same as
+                                                   inventing a wattage)
+   Keywords that are not anchored to a confirmed fact are REPLACED automatically by
+   deterministic phrases built from the ground truth, so writing category filler simply
+   wastes the slot and loses your angle.
+
    Each MUST be woven natively into your hero_paragraph or feature_texts
    as plain sentence text — never inside a bolded phrase, a heading, or emphasized markup.
    You are producing plain strings in JSON, so this mainly means: don't phrase an LSI

@@ -1,13 +1,14 @@
-from fastapi import APIRouter, HTTPException
 from uuid import UUID
-from typing import List
-from app.models.template import Template, TemplateCreate, TemplateUpdate
+
+from fastapi import APIRouter, HTTPException
+
 from app.db.repositories.templates import templates_repo
+from app.models.template import Template, TemplateCreate, TemplateUpdate
 
 router = APIRouter()
 
 
-@router.get("/", response_model=List[Template])
+@router.get("/", response_model=list[Template])
 async def list_templates():
     return await templates_repo.list()
 

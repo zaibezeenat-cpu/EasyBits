@@ -1,5 +1,6 @@
+
 from pydantic import BaseModel
-from typing import Optional
+
 
 class SeoCheckResult(BaseModel):
     check_name: str    # e.g. "product_name_length"
@@ -13,4 +14,4 @@ class ReviewResult(BaseModel):
     warranty_consistent: bool         # 4-location match
     fact_cross_check_passed: bool
     fact_cross_check_notes: list[str]
-    failure_summary: Optional[str] = None
+    failure_summary: str | None = None

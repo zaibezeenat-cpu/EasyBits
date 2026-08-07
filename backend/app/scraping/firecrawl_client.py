@@ -1,7 +1,9 @@
 from firecrawl import FirecrawlApp
+
 from app.core.config import settings
-from app.scraping.models import ScrapeResult
 from app.core.logging import logger
+from app.scraping.models import ScrapeResult
+
 
 class FirecrawlClient:
     def __init__(self):
@@ -17,7 +19,7 @@ class FirecrawlClient:
             response = self.app.search(query)
             return response.get('data', [])
         except Exception as e:
-            logger.error(f"Firecrawl search error for query '{query}': {str(e)}")
+            logger.error(f"Firecrawl search error for query '{query}': {e!s}")
             return []
 
     async def scrape_url(self, url: str) -> ScrapeResult:
@@ -53,7 +55,7 @@ class FirecrawlClient:
                     error_message="No markdown content returned"
                 )
         except Exception as e:
-            logger.error(f"Firecrawl error scraping {url}: {str(e)}")
+            logger.error(f"Firecrawl error scraping {url}: {e!s}")
             return ScrapeResult(
                 url=url,
                 content="",

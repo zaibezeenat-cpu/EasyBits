@@ -8,6 +8,7 @@ persistence fix in batch_processor.py.
 import asyncio
 import json
 from decimal import Decimal
+
 from app.db.repositories.batches import batches_repo
 from app.db.repositories.products import products_repo
 from app.graph.batch_processor import BatchProcessor
@@ -24,8 +25,8 @@ async def main():
         brand_name="DAWLANCE",
         category_name="Microwave Oven",
         product_type="Microwave Oven",
-        regular_price=Decimal("29000"),
-        sale_price=Decimal("27500"),
+        regular_price=Decimal(29000),
+        sale_price=Decimal(27500),
         in_stock=True,
         template_choice="A",
         # TEST-ONLY value. warranty_matrix has no real seeded data yet (that

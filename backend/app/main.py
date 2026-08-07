@@ -12,11 +12,13 @@ from app.api.routes import (
     batches,
     dashboard,
     products,
-    settings as settings_routes,
     sources,
     taxonomy,
     templates,
     warranty,
+)
+from app.api.routes import (
+    settings as settings_routes,
 )
 from app.api.routes.auth import limiter
 from app.core.config import settings

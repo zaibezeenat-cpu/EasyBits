@@ -1,5 +1,7 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 from fastapi import APIRouter
+
 from app.db.supabase_client import get_supabase
 
 router = APIRouter()
@@ -22,7 +24,7 @@ async def get_dashboard_stats():
     batches_in_progress = await db.table("batches").select("id", count="exact").eq("status", "processing").execute()
     batches_in_progress_count = batches_in_progress.count or 0
 
-    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    week_ago = (datetime.now(UTC) - timedelta(days=7)).isoformat()
 
     week_approved = await db.table("products").select("id", count="exact").in_(
         "status", ["approved", "exported"]
@@ -39,8 +41,8 @@ async def get_dashboard_stats():
     durations = []
     for row in qa_rows.data or []:
         if row.get("ready_for_qa_at") and row.get("approved_at"):
-            ready_at = datetime.fromisoformat(row["ready_for_qa_at"].replace("Z", "+00:00"))
-            approved_at = datetime.fromisoformat(row["approved_at"].replace("Z", "+00:00"))
+            ready_at = datetime.fromisoformat(row["ready_for_qa_at"])
+            approved_at = datetime.fromisoformat(row["approved_at"])
             durations.append((approved_at - ready_at).total_seconds())
 
     avg_qa_seconds = sum(durations) / len(durations) if durations else None

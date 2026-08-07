@@ -1,8 +1,10 @@
 from datetime import date, timedelta
+
 from fastapi import APIRouter
-from app.db.repositories.warranty import warranty_repo
+
 from app.db.repositories.brands import brands_repo
 from app.db.repositories.categories import categories_repo
+from app.db.repositories.warranty import warranty_repo
 
 router = APIRouter()
 

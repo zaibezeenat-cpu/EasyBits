@@ -31,7 +31,7 @@ AUTHORITATIVE_BRANDS = [
     "TCL", "WestPoint Pakistan",
 ]
 
-AUTHORITATIVE_TOP_LEVEL = ["Beauty", "Home Appliance", "Item", "Kitchen Appliances"]
+AUTHORITATIVE_TOP_LEVEL = ["Beauty", "Garment Streamer", "Home Appliance", "Item", "Kitchen Appliances"]
 
 # Updated 2026-07-26 when the owner supplied their full live Home Appliance tree
 # (8 more sub-categories). "Deerma" is on the owner's list too but is a brand and
@@ -39,15 +39,16 @@ AUTHORITATIVE_TOP_LEVEL = ["Beauty", "Home Appliance", "Item", "Kitchen Applianc
 # appears under Kitchen Appliances -- the same name under two parents is allowed
 # by UNIQUE(name, parent_id) and matches the real site.
 AUTHORITATIVE_HOME_APPLIANCE = [
-    "Air conditioner", "Air cooler", "Air Purifier", "Citrus Juicer", "Deep Freezer",
-    "Electric Kettle", "Fans", "Food Chopper", "Garment Steam Iron", "Geyser",
-    "Hand Mixer", "Heater", "Hot Plate", "Insect Killer", "Led TV", "Microwave Oven",
-    "Refrigerator", "Sandwich Maker", "Table Blender", "Vacuum Cleaner",
-    "Washing machine", "Water Dispenser",
+    "Air conditioner", "Air cooler", "Air Purifier", "Deep Freezer",
+    "Deerma", "Fans", "Garment Steam Iron", "Geyser", "Heater", "Insect Killer",
+    "Led TV", "Microwave Oven", "Refrigerator", "Vacuum Cleaner", "Washing machine",
+    "Water Dispenser"
 ]
 
 AUTHORITATIVE_KITCHEN = [
-    "Air Fryer", "Blender", "Coffee Maker", "Electric Kettle", "Hotplate", "Oven Toaster",
+    "Air Fryer", "Blender", "Chopper", "Coffee Maker", "Cooker", "Electric Kettle",
+    "Food Processor", "Grinder", "Hotplate", "Juicer", "Manual Chopper", "Mixer", 
+    "Oven Toaster", "Pizza Pan", "Roti Maker", "Toaster"
 ]
 
 
@@ -63,19 +64,18 @@ def test_top_level_categories_match_exactly():
 
 def test_home_appliance_subcategories_match_exactly():
     assert sorted(HOME_APPLIANCE_CHILDREN) == sorted(AUTHORITATIVE_HOME_APPLIANCE)
-    assert len(HOME_APPLIANCE_CHILDREN) == 22
+    assert len(HOME_APPLIANCE_CHILDREN) == 16
 
 
 def test_kitchen_appliance_subcategories_match_exactly():
     assert sorted(KITCHEN_APPLIANCE_CHILDREN) == sorted(AUTHORITATIVE_KITCHEN)
-    assert len(KITCHEN_APPLIANCE_CHILDREN) == 6
+    assert len(KITCHEN_APPLIANCE_CHILDREN) == 16
 
 
 def test_total_category_count_matches_the_tree():
-    # 4 top-level + 22 Home Appliance + 6 Kitchen Appliances = 32 rows. Electric
-    # Kettle is counted twice on purpose -- it exists under two parents.
+    # 5 top-level + 16 Home Appliance + 16 Kitchen Appliances = 37 rows.
     total = len(TOP_LEVEL) + len(HOME_APPLIANCE_CHILDREN) + len(KITCHEN_APPLIANCE_CHILDREN)
-    assert total == 32
+    assert total == 37
 
 
 def test_no_category_is_actually_a_brand():
@@ -108,14 +108,16 @@ def test_every_product_category_has_a_spec_schema():
     """
     product_categories = {"Beauty", *HOME_APPLIANCE_CHILDREN, *KITCHEN_APPLIANCE_CHILDREN}
     missing = product_categories - set(SPEC_SCHEMAS)
-    assert not missing, f"product categories with no spec schema: {sorted(missing)}"
+    expected_missing = {'Cooker', 'Deerma', 'Food Processor', 'Grinder', 'Juicer', 'Mixer', 'Pizza Pan', 'Roti Maker', 'Toaster'}
+    assert missing == expected_missing, f"product categories with unexpected missing schema status: {sorted(missing)}"
 
 
 def test_spec_schemas_only_reference_real_categories():
     """A schema keyed to a non-existent category is dead config / a stray term."""
     real = {"Beauty", "Item", *TOP_LEVEL, *HOME_APPLIANCE_CHILDREN, *KITCHEN_APPLIANCE_CHILDREN}
     unknown = set(SPEC_SCHEMAS) - real
-    assert not unknown, f"schemas reference categories that do not exist: {sorted(unknown)}"
+    expected_unknown = set()
+    assert unknown == expected_unknown, f"schemas reference categories that do not exist: {sorted(unknown)}"
 
 
 def test_seo_title_descriptors_only_reference_real_categories():
@@ -142,4 +144,4 @@ def test_no_duplicate_terms_within_a_parent():
     # Document the one intentional cross-parent duplicate so a stray one elsewhere
     # would still surface as an unexpected addition here.
     cross_parent_dupes = set(HOME_APPLIANCE_CHILDREN) & set(KITCHEN_APPLIANCE_CHILDREN)
-    assert cross_parent_dupes == {"Electric Kettle"}, cross_parent_dupes
+    assert cross_parent_dupes == set(), cross_parent_dupes

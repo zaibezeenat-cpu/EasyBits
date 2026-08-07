@@ -13,15 +13,15 @@ from app.models.raw_input import RawProductInput
 
 
 def _state(**raw_overrides) -> PipelineState:
-    base = dict(
-        sku="WF-6807",
-        model_number="WF-6807",
-        brand_name="Westpoint",
-        category_name="AC",
-        product_type="Hair Straightener",
-        regular_price=Decimal("6400"),
-        sale_price=Decimal("6400"),
-    )
+    base = {
+        "sku": "WF-6807",
+        "model_number": "WF-6807",
+        "brand_name": "Westpoint",
+        "category_name": "AC",
+        "product_type": "Hair Straightener",
+        "regular_price": Decimal(6400),
+        "sale_price": Decimal(6400),
+    }
     base.update(raw_overrides)
     return PipelineState(
         product_id=uuid4(),

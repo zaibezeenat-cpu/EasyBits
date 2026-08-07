@@ -193,8 +193,16 @@ async def _fetch_with_curl(url: str, model_number: str = "") -> ScrapeResult | N
     )
 
 
-async def smart_fetch(url: str, model_number: str = "") -> ScrapeResult:
+async def smart_fetch(
+    url: str, model_number: str = "", allow_tier2: bool = True
+) -> ScrapeResult:
     """Fetch a URL with the cheapest engine that works (Tier 1 -> Tier 2).
+
+    `allow_tier2=False` forbids the browser entirely and returns whatever Tier 1
+    produced, even when it is not good enough. That is the orchestrator's first
+    pass: sweep every domain cheaply, find the ones that answer outright, and
+    only then spend a browser on what is left. Returning the weak result rather
+    than None keeps the caller's block/mention/follow logic working on it.
 
     The caller (orchestrator) still applies its own block/mention/follow logic on
     the returned result, so a still-blocked Tier-2 result flows through to the
@@ -222,6 +230,29 @@ async def smart_fetch(url: str, model_number: str = "") -> ScrapeResult:
             "fetch_reason": decision.reason,
         }
         return tier1
+
+    if not allow_tier2:
+        # Pass 1: the browser is off limits. Hand back whatever Tier 1 got --
+        # weak, but the caller only needs to learn "this domain did not answer
+        # cheaply" and move on. A failed curl (tier1 is None) becomes an
+        # unsuccessful result rather than silently launching a browser here,
+        # which would defeat the entire point of a browser-free pass.
+        logger.debug(
+            f"Tier 1 insufficient for {url} [{decision.reason}] in {tier1_ms}ms; "
+            f"browser not allowed this pass, deferring."
+        )
+        deferred = tier1 or ScrapeResult(
+            url=url, content="", engine_used="curl_cffi",
+            success=False, error_message=f"tier1 failed: {decision.reason}",
+        )
+        deferred.metadata = {
+            **deferred.metadata,
+            "fetch_tier": 1,
+            "fetch_tier1_ms": tier1_ms,
+            "fetch_reason": decision.reason,
+            "fetch_deferred": True,
+        }
+        return deferred
 
     logger.info(
         f"Tier 1 insufficient for {url} [{decision.reason}] after {tier1_ms}ms; "

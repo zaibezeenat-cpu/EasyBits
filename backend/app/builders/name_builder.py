@@ -56,9 +56,9 @@ def _clean_capacity(capacity: str) -> str:
     # Drop trailing zeros on ANY decimal first, so "1.0"/"1.00" both become "1"
     # regardless of which unit (or no unit) follows.
     capacity = re.sub(r"\d+\.\d+", _strip_trailing_zeros, capacity)
-    capacity = re.sub(r"(\d+)\s*Liters?\b", r"\1L", capacity, flags=re.I)
-    capacity = re.sub(r"(\d+)\s*L(?![a-zA-Z])", r"\1L", capacity, flags=re.I)
-    capacity = re.sub(r"(\d+(?:\.\d+)?)\s*Ton\b", r"\1 Ton", capacity, flags=re.I)
+    capacity = re.sub(r"(\d+)\s*Liters?\b", r"\1L", capacity, flags=re.IGNORECASE)
+    capacity = re.sub(r"(\d+)\s*L(?![a-zA-Z])", r"\1L", capacity, flags=re.IGNORECASE)
+    capacity = re.sub(r"(\d+(?:\.\d+)?)\s*Ton\b", r"\1 Ton", capacity, flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", capacity).strip()
 
 
@@ -153,6 +153,6 @@ def contains_forbidden_abbreviation(name: str) -> str | None:
     Used by the SEO validator so an abbreviated title is caught before export.
     """
     for abbreviation in _FORBIDDEN_ABBREVIATIONS:
-        if re.search(rf"\b{re.escape(abbreviation)}\b", name, flags=re.I):
+        if re.search(rf"\b{re.escape(abbreviation)}\b", name, flags=re.IGNORECASE):
             return abbreviation
     return None

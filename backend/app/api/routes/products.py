@@ -1,16 +1,18 @@
-from fastapi import APIRouter, HTTPException
-from uuid import UUID
 from decimal import Decimal
-from typing import Any, List, Optional
+from typing import Any
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from app.models.product import Product, ProductUpdate
-from app.models.raw_input import RawProductInput
-from app.db.repositories.products import products_repo
-from app.db.repositories.citations import citations_repo
+
+from app.builders.category_classifier import llm_pick_category
+from app.builders.input_adapter import parse_sheet_row
 from app.db.repositories.brands import brands_repo
 from app.db.repositories.categories import categories_repo
-from app.builders.input_adapter import parse_sheet_row
-from app.builders.category_classifier import llm_pick_category
+from app.db.repositories.citations import citations_repo
+from app.db.repositories.products import products_repo
+from app.models.product import Product, ProductUpdate
+from app.models.raw_input import RawProductInput
 
 router = APIRouter()
 
@@ -28,28 +30,28 @@ class SheetRowInput(BaseModel):
     product_name: str
     price_a: Decimal
     price_b: Decimal
-    warranty: Optional[str] = None
-    status: Optional[str] = None
+    warranty: str | None = None
+    status: str | None = None
 
 
 class SheetRowPreview(BaseModel):
     """Result of parsing one row, before anything is written."""
     product_name: str
-    sku: Optional[str] = None
-    model_number: Optional[str] = None
-    brand_name: Optional[str] = None
-    category_name: Optional[str] = None
-    category_path: Optional[str] = None
+    sku: str | None = None
+    model_number: str | None = None
+    brand_name: str | None = None
+    category_name: str | None = None
+    category_path: str | None = None
     regular_price: Decimal
-    sale_price: Optional[Decimal] = None
-    warranty_phrase: Optional[str] = None
-    template_choice: Optional[str] = None
-    missing_required: List[str] = []
+    sale_price: Decimal | None = None
+    warranty_phrase: str | None = None
+    template_choice: str | None = None
+    missing_required: list[str] = []
     ready: bool = False
 
 
-@router.post("/parse-sheet", response_model=List[SheetRowPreview])
-async def parse_sheet(rows: List[SheetRowInput]):
+@router.post("/parse-sheet", response_model=list[SheetRowPreview])
+async def parse_sheet(rows: list[SheetRowInput]):
     """
     Parses pasted spreadsheet rows and returns what the system resolved, WITHOUT
     creating anything. Powers the bulk-import preview so prices, SKUs, brands and
@@ -62,7 +64,7 @@ async def parse_sheet(rows: List[SheetRowInput]):
     known_brands = await brands_repo.get_active_names()
     known_categories, category_parents = await categories_repo.get_active_names_and_parents()
 
-    previews: List[SheetRowPreview] = []
+    previews: list[SheetRowPreview] = []
     for row in rows:
         try:
             parsed = parse_sheet_row(
@@ -114,8 +116,8 @@ async def parse_sheet(rows: List[SheetRowInput]):
         ))
     return previews
 
-@router.get("/", response_model=List[Product])
-async def list_products(status: Optional[str] = None):
+@router.get("/", response_model=list[Product])
+async def list_products(status: str | None = None):
     """Powers the Products index page and the Dashboard's stat-card links."""
     filters = {"status": status} if status else {}
     return await products_repo.list(filters=filters)
@@ -148,7 +150,7 @@ async def create_product(batch_id: UUID, raw_input: RawProductInput):
     """
     return await products_repo.create(build_product_row(batch_id, raw_input))
 
-@router.get("/batch/{batch_id}", response_model=List[Product])
+@router.get("/batch/{batch_id}", response_model=list[Product])
 async def list_products_by_batch(batch_id: UUID):
     return await products_repo.get_by_batch(batch_id)
 
