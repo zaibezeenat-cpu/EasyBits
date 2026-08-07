@@ -11,7 +11,12 @@ class RawProductInput(BaseModel):
     category_name: str
     product_type: str                            # e.g. "Air Conditioner" (Phase 2 §3.1)
     regular_price: Decimal
-    sale_price: Decimal
+    # None means "no discount" -- assign_prices() returns this deliberately when
+    # the sheet carries a single price, so a product with one price is a real,
+    # valid state here, not a missing value. Every reader downstream (the CSV
+    # assembler, build_product_row) already treats a falsy sale_price as "show
+    # no sale price"; this only makes the type honest about that.
+    sale_price: Decimal | None = None
     in_stock: bool = True                        # closes #14 — surfaced by StockStatusToggle.tsx
     warranty_override: str | None = None      # phase1.md §5.5's per-product override
     template_choice: Literal["A", "B"] = "A"

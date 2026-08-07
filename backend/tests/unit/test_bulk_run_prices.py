@@ -49,6 +49,43 @@ def test_no_markup_multiplier_survives_in_bulk_run(multiplier):
     )
 
 
+def test_a_single_price_row_builds_without_crashing():
+    """
+    THE ACTUAL CRASH. assign_prices() correctly returns sale_price=None for a
+    single-price row -- but RawProductInput.sale_price was typed as a required
+    Decimal, so building the model from that output raised a ValidationError
+    before the product was ever queued. This is the shape a Manual Chopper test
+    sheet with only one price column hits.
+    """
+    from app.models.raw_input import RawProductInput
+
+    regular, sale = assign_prices(Decimal("4260"), Decimal("4260"))
+    raw = RawProductInput(
+        sku="CHOP-1", model_number="CHOP-1", brand_name="Anex",
+        category_name="Chopper", product_type="Chopper",
+        regular_price=regular, sale_price=sale,
+    )
+    assert raw.regular_price == Decimal("4260")
+    assert raw.sale_price is None
+
+
+def test_build_product_row_handles_no_discount():
+    """The DB row (and the API route it's shared with) must not crash on None either."""
+    from uuid import uuid4
+
+    from app.api.routes.products import build_product_row
+    from app.models.raw_input import RawProductInput
+
+    raw = RawProductInput(
+        sku="CHOP-1", model_number="CHOP-1", brand_name="Anex",
+        category_name="Chopper", product_type="Chopper",
+        regular_price=Decimal("4260"), sale_price=None,
+    )
+    row = build_product_row(uuid4(), raw)
+    assert row["regular_price"] == 4260.0
+    assert row["sale_price"] is None
+
+
 def test_two_real_prices_still_produce_a_real_discount():
     """The ordinary case must be untouched: higher is regular, lower is sale."""
     regular, sale = assign_prices(Decimal("9700"), Decimal("6400"))

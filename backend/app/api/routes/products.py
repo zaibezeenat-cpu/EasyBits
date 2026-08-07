@@ -135,7 +135,7 @@ def build_product_row(batch_id: UUID, raw_input: RawProductInput) -> dict[str, A
         "model_number": raw_input.model_number,
         "raw_input": raw_input.model_dump(mode="json"),
         "regular_price": float(raw_input.regular_price),
-        "sale_price": float(raw_input.sale_price),
+        "sale_price": float(raw_input.sale_price) if raw_input.sale_price is not None else None,
         "in_stock": raw_input.in_stock,
         "warranty_override": raw_input.warranty_override,
     }

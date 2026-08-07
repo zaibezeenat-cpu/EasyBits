@@ -42,7 +42,7 @@ async def main():
         "model_number": raw_input.model_number,
         "raw_input": json.loads(raw_input.model_dump_json()),
         "regular_price": float(raw_input.regular_price),
-        "sale_price": float(raw_input.sale_price),
+        "sale_price": float(raw_input.sale_price) if raw_input.sale_price is not None else None,
         "in_stock": raw_input.in_stock,
     })
     print(f"Created product: {product.id}")
