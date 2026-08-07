@@ -275,7 +275,7 @@ def infer_category(
     _DEFAULT_CATEGORY_EXCLUSIONS).
 
     When several categories match, the deepest of a specificity chain wins
-    ("Manual Chopper" over "Chopper") -- see _most_specific. Anything else
+    ("Hand Chopper" over "Chopper") -- see _most_specific. Anything else
     ambiguous returns None, on purpose: a wrong category produces a wrong
     "Parent > Category" breadcrumb and files the product in the wrong place on
     the live store, which is harder to notice and undo than a row sitting in
@@ -311,12 +311,12 @@ def _most_specific(matches: set[str]) -> str | None:
     """Resolves a specificity chain to its deepest category, else None.
 
     A taxonomy can hold both a general category and a narrower variant of it
-    ("Chopper" / "Manual Chopper"). A title naming the specific one necessarily
+    ("Chopper" / "Hand Chopper"). A title naming the specific one necessarily
     contains the general one's name too, so both match and the caller's
     ambiguity guard would reject a title that was in fact perfectly explicit.
 
     A category is MORE SPECIFIC than another when its words are a strict
-    superset of the other's -- "Manual Chopper" over "Chopper". Choosing it is
+    superset of the other's -- "Hand Chopper" over "Chopper". Choosing it is
     reading the title, not deducing past it: the extra word is literally
     present. Word sets, not substrings, so "Chop Saw" and "Chopper" are
     unrelated despite the shared prefix.

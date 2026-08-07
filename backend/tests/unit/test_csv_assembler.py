@@ -130,7 +130,7 @@ def test_assemble_csv_row_strips_newlines_and_tabs():
 
 def test_assemble_csv_row_manual_chopper_alias():
     raw_input = RawProductInput(
-        sku="S1", model_number="M1", brand_name="Anex", category_name="Manual Chopper",
+        sku="S1", model_number="M1", brand_name="Anex", category_name="Hand Chopper",
         product_type="Chopper", regular_price=Decimal(100), sale_price=Decimal(90),
     )
     state = PipelineState(
@@ -138,7 +138,7 @@ def test_assemble_csv_row_manual_chopper_alias():
         name="Name", short_description="x", description="d",
         specs_table_html="t", resolved_warranty_phrase="1-Year"
     )
-    row = assemble_csv_row(state, "Kitchen Appliances > Manual Chopper", "Anex", canonical_category_path="Kitchen Appliances > Manual Chopper")
+    row = assemble_csv_row(state, "Kitchen Appliances > Hand Chopper", "Anex", canonical_category_path="Kitchen Appliances > Hand Chopper")
     
     assert row["Categories"] == "Kitchen Appliances > Chopper"
 

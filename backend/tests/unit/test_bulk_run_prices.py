@@ -79,7 +79,7 @@ def test_a_single_price_row_builds_without_crashing():
     THE ACTUAL CRASH. assign_prices() correctly returns sale_price=None for a
     single-price row -- but RawProductInput.sale_price was typed as a required
     Decimal, so building the model from that output raised a ValidationError
-    before the product was ever queued. This is the shape a Manual Chopper test
+    before the product was ever queued. This is the shape a Hand Chopper test
     sheet with only one price column hits.
     """
     from app.models.raw_input import RawProductInput

@@ -213,7 +213,7 @@ CATEGORICAL_CASES = [
      "separate freezer compartment with its own door"),
     ("Microwave Oven", "control_type", "Digital",
      "digital touch panel with 10 preset menus"),
-    ("Manual Chopper", "operation_type", "Manual",
+    ("Hand Chopper", "operation_type", "Manual",
      "pull-cord operated, no electricity required"),
     ("Blender", "jar_material", "Glass",
      "heat-resistant glass jar, dishwasher safe"),

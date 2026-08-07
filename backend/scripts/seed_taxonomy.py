@@ -90,7 +90,7 @@ HOME_APPLIANCE_CHILDREN = [
 KITCHEN_APPLIANCE_CHILDREN = [
     "Air Fryer", "Blender", "Chopper", "Coffee Maker", "Cooker", "Electric Kettle",
     "Food Processor", "Hotplate", "Juicer", "Grinder", "Mixer", "Oven Toaster",
-    "Pizza Pan", "Roti Maker", "Toaster", "Manual Chopper"
+    "Pizza Pan", "Roti Maker", "Toaster", "Hand Chopper", "Hand Blender"
 ]
 
 # --- Category spec schemas -------------------------------------------------
@@ -186,8 +186,18 @@ SPEC_SCHEMAS = {
         ("capacity", "Bowl Capacity", True), ("wattage", "Wattage", True),
         ("blades", "Blades", False), ("features", "Features", False),
     ),
-    "Manual Chopper": _spec(
+    # Hand-operated variants: no motor, so no wattage field at all. That is the
+    # whole reason they are separate categories -- the electric schemas require a
+    # wattage these products cannot have, which sent them to Manual Review.
+    "Hand Chopper": _spec(
         ("capacity", "Bowl Capacity", False),
+        ("blades", "Blades", False),
+        ("operation_type", "Operation Type", False),
+        ("material", "Material", False),
+        ("features", "Features", False),
+    ),
+    "Hand Blender": _spec(
+        ("capacity", "Capacity", False),
         ("blades", "Blades", False),
         ("operation_type", "Operation Type", False),
         ("material", "Material", False),

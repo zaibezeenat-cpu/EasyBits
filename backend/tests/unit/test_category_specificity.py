@@ -4,8 +4,8 @@ Specificity resolution in category inference.
 THE PROBLEM
 -----------
 A taxonomy can hold a general category and a more specific variant of it:
-"Chopper" and "Manual Chopper", "Oven" and "Microwave Oven". A title naming
-the specific one ("Anex Manual Chopper") necessarily also contains the general
+"Chopper" and "Hand Chopper", "Oven" and "Microwave Oven". A title naming
+the specific one ("Anex Hand Chopper") necessarily also contains the general
 one's name, so BOTH match -- and infer_category treats >1 match as ambiguous
 and returns None. The specific category can therefore never be inferred, no
 matter how explicitly the title states it.
@@ -14,8 +14,8 @@ THE RULE
 --------
 When every match is a specificity chain -- one category's name is a strict
 superset of another's words -- the most specific one wins. That is not a
-guess: the title literally contains the extra word ("Manual"), so choosing
-"Manual Chopper" is READING the title, not deducing beyond it.
+guess: the title literally contains the extra word ("Hand"), so choosing
+"Hand Chopper" is READING the title, not deducing beyond it.
 
 Genuinely unrelated matches ("Blender" and "Chopper" both present) stay
 ambiguous and still return None. Ambiguity is only resolved where the
@@ -23,12 +23,12 @@ taxonomy itself defines the relationship.
 """
 from app.builders.input_adapter import infer_category
 
-CHOPPERS = ["Chopper", "Manual Chopper"]
+CHOPPERS = ["Chopper", "Hand Chopper"]
 
 
 def test_the_specific_variant_wins_when_the_title_names_it():
     """THE HEADLINE CASE. Both match; the extra word is in the title."""
-    assert infer_category("Anex Manual Chopper 1.5L", CHOPPERS) == "Manual Chopper"
+    assert infer_category("Anex Hand Chopper 1.5L", CHOPPERS) == "Hand Chopper"
 
 
 def test_the_general_category_still_wins_when_nothing_narrows_it():

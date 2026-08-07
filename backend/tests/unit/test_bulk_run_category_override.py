@@ -5,7 +5,7 @@ THE BUG THIS FIXES
 -------------------
 A real row: SKU "AG-01", Name "Handy Pull Chopper" (Anex's actual product page
 title). The taxonomy has two separate categories -- "Chopper" (electric, wattage
-required) and "Manual Chopper" (hand-operated, no wattage field at all) -- and
+required) and "Hand Chopper" (hand-operated, no wattage field at all) -- and
 the title contains the word "chopper" but never "manual". Deterministic matching
 (`input_adapter.infer_category`) finds exactly one pattern match ("Chopper") and
 returns it confidently; the LLM fallback never runs because that path only
@@ -31,8 +31,8 @@ import pytest
 from scripts.bulk_run import _build_inputs
 
 KNOWN_BRANDS = ["Anex"]
-KNOWN_CATEGORIES = ["Chopper", "Manual Chopper"]
-CATEGORY_PARENTS = {"Chopper": "Kitchen Appliances", "Manual Chopper": "Kitchen Appliances"}
+KNOWN_CATEGORIES = ["Chopper", "Hand Chopper"]
+CATEGORY_PARENTS = {"Chopper": "Kitchen Appliances", "Hand Chopper": "Kitchen Appliances"}
 
 
 def _row(**overrides) -> dict:
@@ -75,17 +75,17 @@ async def test_without_an_override_the_bug_reproduces():
 @pytest.mark.asyncio
 async def test_a_category_column_overrides_the_deterministic_guess():
     """THE FIX. The operator states the real category; the guess never runs."""
-    inputs, skipped = await _run([_row(Category="Manual Chopper")])
+    inputs, skipped = await _run([_row(Category="Hand Chopper")])
     assert not skipped
-    assert inputs[0].category_name == "Manual Chopper"
+    assert inputs[0].category_name == "Hand Chopper"
 
 
 @pytest.mark.asyncio
 async def test_the_override_is_case_insensitive_but_stores_exact_taxonomy_casing():
     """Same contract as the Brand override: match loosely, store canonically."""
-    inputs, skipped = await _run([_row(Category="manual chopper")])
+    inputs, skipped = await _run([_row(Category="hand chopper")])
     assert not skipped
-    assert inputs[0].category_name == "Manual Chopper"
+    assert inputs[0].category_name == "Hand Chopper"
 
 
 @pytest.mark.asyncio

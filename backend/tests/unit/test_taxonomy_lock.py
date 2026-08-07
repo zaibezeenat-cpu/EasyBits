@@ -47,8 +47,8 @@ AUTHORITATIVE_HOME_APPLIANCE = [
 
 AUTHORITATIVE_KITCHEN = [
     "Air Fryer", "Blender", "Chopper", "Coffee Maker", "Cooker", "Electric Kettle",
-    "Food Processor", "Grinder", "Hotplate", "Juicer", "Manual Chopper", "Mixer", 
-    "Oven Toaster", "Pizza Pan", "Roti Maker", "Toaster"
+    "Food Processor", "Grinder", "Hand Blender", "Hand Chopper", "Hotplate",
+    "Juicer", "Mixer", "Oven Toaster", "Pizza Pan", "Roti Maker", "Toaster"
 ]
 
 
@@ -69,13 +69,13 @@ def test_home_appliance_subcategories_match_exactly():
 
 def test_kitchen_appliance_subcategories_match_exactly():
     assert sorted(KITCHEN_APPLIANCE_CHILDREN) == sorted(AUTHORITATIVE_KITCHEN)
-    assert len(KITCHEN_APPLIANCE_CHILDREN) == 16
+    assert len(KITCHEN_APPLIANCE_CHILDREN) == 17
 
 
 def test_total_category_count_matches_the_tree():
-    # 5 top-level + 16 Home Appliance + 16 Kitchen Appliances = 37 rows.
+    # 5 top-level + 16 Home Appliance + 17 Kitchen Appliances = 38 rows.
     total = len(TOP_LEVEL) + len(HOME_APPLIANCE_CHILDREN) + len(KITCHEN_APPLIANCE_CHILDREN)
-    assert total == 37
+    assert total == 38
 
 
 def test_no_category_is_actually_a_brand():
