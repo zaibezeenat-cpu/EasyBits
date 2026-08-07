@@ -141,3 +141,80 @@ def test_assemble_csv_row_manual_chopper_alias():
     row = assemble_csv_row(state, "Kitchen Appliances > Manual Chopper", "Anex", canonical_category_path="Kitchen Appliances > Manual Chopper")
     
     assert row["Categories"] == "Kitchen Appliances > Chopper"
+
+
+# ---------------------------------------------------------------------------
+# PASSTHROUGH MUST NOT BE ABLE TO OVERWRITE A GUARDED COLUMN.
+#
+# Passthrough exists so an operator's own columns (Images, Tax class, Stock)
+# survive the pipeline -- a real need and a standard ingestion pattern. But it
+# runs AFTER the Brand and Category casing locks and after existing_id has been
+# validated, so as written it can undo all three.
+#
+# Measured before the fix: passthrough_columns={"Brands": "westpoint pakistan",
+# "Categories": "beauty > hair straightener", "ID": "99999"} landed verbatim in
+# the row. A lower-cased taxonomy term creates a DUPLICATE brand/category in the
+# live WooCommerce store -- exactly what the locks exist to prevent -- and an
+# arbitrary ID silently turns a create into an overwrite of a live product.
+# ---------------------------------------------------------------------------
+import pytest
+
+
+def _row_with_passthrough(passthrough: dict) -> dict:
+    """Assemble a row that satisfies both casing locks, with passthrough applied."""
+    raw_input = RawProductInput(
+        sku="S1", model_number="M1", brand_name="Haier", category_name="AC",
+        product_type="Air Conditioner",
+        regular_price=Decimal(100), sale_price=Decimal(90),
+        passthrough_columns=passthrough,
+    )
+    state = PipelineState(
+        product_id=uuid4(), batch_id=uuid4(), raw_input=raw_input,
+        name="Haier M1 AC", short_description="x", description="d",
+        specs_table_html="<table></table>", resolved_warranty_phrase="1-Year",
+        rank_math_title="Haier M1 AC | Buy Smart",
+    )
+    return assemble_csv_row(
+        state, "Electronics > AC", "Haier",
+        canonical_brand_name="Haier",
+        canonical_category_path="Electronics > AC",
+    )
+
+
+@pytest.mark.parametrize("column,attacker_value", [
+    ("Brands", "haier"),                                  # casing lock bypass
+    ("Categories", "home appliance > air conditioner"),   # casing lock bypass
+    ("ID", "99999"),                                      # create becomes update
+    ("SKU", "SOME-OTHER-SKU"),                            # duplicate-SKU guard bypass
+    ("Name", "Totally Different Product"),
+    ("slug", "hijacked-slug"),
+    ("Meta: rank_math_title", "hijacked title"),
+])
+def test_guarded_columns_survive_a_passthrough_override(column, attacker_value):
+    baseline = _row_with_passthrough({})
+    overridden = _row_with_passthrough({column: attacker_value})
+
+    assert overridden[column] == baseline[column], (
+        f"passthrough overwrote {column!r} -- the guard protecting it is bypassed"
+    )
+
+
+@pytest.mark.parametrize("column,user_value", [
+    ("Images", "https://cdn.example.com/a.jpg"),
+    ("Tax class", "reduced-rate"),
+    ("Shipping class", "bulky"),
+    ("Stock", "42"),
+    ("Purchase note", "Handle with care"),
+])
+def test_operator_columns_are_still_applied(column, user_value):
+    """The feature must keep working -- this is why passthrough exists."""
+    row = _row_with_passthrough({column: user_value})
+    assert row[column] == user_value
+
+
+def test_a_blocked_override_is_logged_by_name(caplog):
+    """Silently dropping it would leave the operator believing their value was used."""
+    with caplog.at_level("WARNING"):
+        _row_with_passthrough({"Brands": "haier", "Images": "https://x/a.jpg"})
+    assert "Brands" in caplog.text
+    assert "Images" not in caplog.text, "an allowed column must not be reported as blocked"

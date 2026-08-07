@@ -76,12 +76,19 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
         reg = _to_decimal(reg_str)
         sale = _to_decimal(sale_str)
 
-        # Smart price fallback logic (with rounding for e-commerce)
+        # One price in the sheet means one price out. It is passed twice so that
+        # assign_prices() -- which decides regular-vs-sale from the VALUES, not the
+        # column headers -- sees them as equal and returns no discount.
+        #
+        # This deliberately does NOT manufacture the missing price. An earlier
+        # version computed `reg = sale * 1.20` so the storefront would always show
+        # a discount, but that invents a price the product was never sold at.
+        # Beyond being false, fake "was" pricing breaches consumer-protection rules
+        # and gets listings disapproved by Google Merchant Center and Facebook
+        # Catalog. If a real markup exists it belongs in the source sheet.
         if reg is None and sale is not None:
-            # 20% markup, quantized to 0 decimal places (e.g. 4260.0 -> 4260)
-            reg = (sale * Decimal("1.20")).quantize(Decimal(1))
+            reg = sale
         elif sale is None and reg is not None:
-            # No discount -> sale = reg
             sale = reg
 
         if not name or reg is None or sale is None:

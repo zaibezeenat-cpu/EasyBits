@@ -1,11 +1,14 @@
 import csv
 import io
+import logging
 from typing import Any
 
 from app.builders.html_sanitizer import strip_newlines_for_csv
 from app.builders.internal_links import build_canonical_url, build_product_slug
 from app.builders.seo_title_builder import build_focus_keyword_field
 from app.graph.state import PipelineState
+
+logger = logging.getLogger(__name__)
 
 COLUMN_ORDER = [
     "ID", "Type", "SKU", "Name", "slug", "Published", "Is featured?", "Visibility in catalog",
@@ -28,6 +31,36 @@ COLUMN_ORDER = [
     "Meta: rank_math_breadcrumb_title",
     "Meta: rank_math_canonical_url",
 ]
+
+
+# Columns the operator's input sheet may overlay onto the generated row.
+#
+# Everything NOT listed here is protected, including by omission -- see the
+# overlay in assemble_csv_row for why. The protected set is, in effect:
+#   ID, SKU            -- identity; ID drives create-vs-overwrite in WooCommerce
+#                         and is validated by RawProductInput.existing_id
+#   Brands, Categories -- guarded by the casing locks; a differing letter creates
+#                         a duplicate taxonomy term in the live store
+#   Name, slug         -- deterministic Boss-Rule outputs, and slug feeds the
+#                         canonical URL
+#   Meta: rank_math_*  -- deterministic SEO fields the validator grades
+PASSTHROUGH_ALLOWED = frozenset({
+    "Published", "Is featured?", "Visibility in catalog",
+    "Date sale price starts", "Date sale price ends",
+    "Tax status", "Tax class",
+    "In stock?", "Stock", "Low stock amount",
+    "Backorders allowed?", "Sold individually?",
+    "Weight (kg)", "Length (cm)", "Width (cm)", "Height (cm)",
+    "Allow customer reviews?", "Purchase note",
+    "Sale price", "Regular price",
+    "Tags", "Shipping class", "Images",
+    "Download limit", "Download expiry days",
+    "Parent", "Grouped products", "Upsells", "Cross-sells",
+    "External URL", "Button text", "Position",
+    "Meta: _woodmart_product_custom_tab_title",
+    "Meta: _woodmart_product_custom_tab_priority",
+    "Meta: _woodmart_product_custom_tab_content_type",
+})
 
 
 class BrandCasingMismatchError(ValueError):
@@ -198,18 +231,40 @@ def assemble_csv_row(
     }
 
     # --- Passthrough Data Overlay ---
-    # Overlay any user-provided columns from the original CSV that map to the final 51 columns.
-    # Note on Overwrite Logic:
-    # If the user provides a blank value (e.g. " "), `str(val).strip()` will evaluate to false,
-    # and the system will retain the AI-generated value. If there's a future need for users to 
-    # intentionally clear out a system-generated field by passing a blank space in the CSV,
-    # this `.strip()` check would need to be revisited or a specific clearing token introduced.
+    # Overlay the operator's own columns from the input CSV onto the generated row,
+    # so data the pipeline does not model (Images, Tax class, Stock) survives.
+    #
+    # Restricted to PASSTHROUGH_ALLOWED. This overlay is the LAST thing to touch the
+    # row -- after the Brand and Category casing locks have run and after
+    # existing_id has been validated -- so an unrestricted overlay silently undoes
+    # all three. Measured: {"Brands": "haier", "ID": "99999"} landed verbatim,
+    # which in a live import means a duplicate brand term and an overwrite of
+    # product 99999 instead of a create.
+    #
+    # An allowlist, not a denylist: a column added to COLUMN_ORDER later is
+    # protected by default and has to be opted in deliberately.
+    #
+    # A blank value (e.g. " ") leaves the generated value in place. Clearing a
+    # generated field would need an explicit token, not an empty cell.
     if p.passthrough_columns:
         column_map = {c.lower(): c for c in COLUMN_ORDER}
+        blocked: list[str] = []
         for user_col, val in p.passthrough_columns.items():
             matched_key = column_map.get(user_col.lower())
-            if matched_key and val and str(val).strip():
-                row[matched_key] = str(val).strip()
+            if not matched_key or not val or not str(val).strip():
+                continue
+            if matched_key not in PASSTHROUGH_ALLOWED:
+                blocked.append(matched_key)
+                continue
+            row[matched_key] = str(val).strip()
+        if blocked:
+            # Reported, never silent: dropping it quietly would leave the operator
+            # believing their value shipped.
+            logger.warning(
+                f"Ignored passthrough override for protected column(s) "
+                f"{sorted(blocked)} on SKU {p.sku}: these are derived from verified "
+                f"taxonomy/identity and cannot be set from the input sheet."
+            )
 
     # --- Chopper Alias (Phase 3) ---
     # Convert 'Manual Chopper' to 'Chopper' on export so WooCommerce doesn't create duplicate categories.
