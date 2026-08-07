@@ -4,6 +4,12 @@
 .cursor
 *.log
 
+# Claude Code: .claude/skills and .claude/settings.json ARE tracked so every
+# machine and every session gets the same skills. Only the per-machine files
+# are ignored -- settings.local.json holds one developer's permission grants
+# and would conflict on every pull.
+.claude/settings.local.json
+
 # Backend
 backend/.venv/
 *.egg-info/
