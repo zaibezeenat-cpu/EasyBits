@@ -145,3 +145,90 @@ def test_no_duplicate_terms_within_a_parent():
     # would still surface as an unexpected addition here.
     cross_parent_dupes = set(HOME_APPLIANCE_CHILDREN) & set(KITCHEN_APPLIANCE_CHILDREN)
     assert cross_parent_dupes == set(), cross_parent_dupes
+
+
+# ---------------------------------------------------------------------------
+# PIPELINE-ONLY CATEGORIES.
+#
+# A few categories exist in the pipeline but NOT in the live store. A hand
+# chopper has no motor and therefore no wattage, so it needs its own spec schema
+# and therefore its own category -- but the store sells it as plain "Chopper".
+# csv_assembler.STORE_CATEGORY_ALIASES translates the name back on export.
+#
+# WHY THIS NEEDS A LOCK: if such a category ships WITHOUT an alias, the CSV
+# carries a term WooCommerce has never seen and the import CREATES it -- the
+# exact silent damage this whole file exists to prevent, and one the casing lock
+# cannot catch (the value is correct against OUR taxonomy; it is the store's it
+# does not match).
+#
+# Declared here by hand, deliberately, and compared against the alias table
+# rather than derived from it. Deriving would make the test agree with whatever
+# the code says, which per this file's own history protects nothing.
+PIPELINE_ONLY_CATEGORIES = {"Hand Chopper", "Hand Blender"}
+
+
+def _alias_source_leaves() -> set[str]:
+    """The leaf name of each aliased breadcrumb, e.g. "Hand Chopper"."""
+    from app.builders.csv_assembler import STORE_CATEGORY_ALIASES
+
+    return {source.split(" > ")[-1] for source in STORE_CATEGORY_ALIASES}
+
+
+def test_every_pipeline_only_category_has_a_store_alias():
+    """
+    Without an alias the CSV exports a term the store does not have and
+    WooCommerce creates it on import.
+    """
+    missing = PIPELINE_ONLY_CATEGORIES - _alias_source_leaves()
+    assert not missing, (
+        f"{sorted(missing)} exist only in the pipeline but have no "
+        f"STORE_CATEGORY_ALIASES entry -- importing them would create new "
+        f"categories in the live store"
+    )
+
+
+def test_no_real_store_category_is_aliased_away():
+    """
+    The opposite mistake, and the more damaging one. An alias on a category the
+    store really has silently MOVES those products: alias "Blender" and every
+    blender is filed somewhere else on the live site. Nothing downstream would
+    report it -- the CSV is valid, just wrong.
+    """
+    stray = _alias_source_leaves() - PIPELINE_ONLY_CATEGORIES
+    assert not stray, (
+        f"{sorted(stray)} are real store categories but are being aliased to "
+        f"something else on export -- their products would be filed under the "
+        f"wrong category in the live store"
+    )
+
+
+def test_pipeline_only_categories_are_actually_seeded():
+    """
+    Closes the third side. A category removed from the seed but left in the
+    alias table is dead config that reads as intentional; the next person adding
+    a variant copies it and trusts a mapping that no longer applies to anything.
+    """
+    seeded = set(TOP_LEVEL) | set(HOME_APPLIANCE_CHILDREN) | set(KITCHEN_APPLIANCE_CHILDREN)
+    orphaned = PIPELINE_ONLY_CATEGORIES - seeded
+    assert not orphaned, (
+        f"{sorted(orphaned)} are declared pipeline-only and aliased, but no "
+        f"longer exist in the seeded taxonomy -- remove the alias too"
+    )
+
+
+def test_every_pipeline_only_category_has_its_own_spec_schema():
+    """
+    The whole REASON these categories exist. "Hand Chopper" is a separate
+    category so it can carry a schema with no wattage field; without a schema of
+    its own the product routes to Manual Review with missing_category_schema,
+    which is the failure the split was meant to end.
+    """
+    for category in sorted(PIPELINE_ONLY_CATEGORIES):
+        assert category in SPEC_SCHEMAS, (
+            f"{category!r} has no spec schema -- its products will route to "
+            f"Manual Review, defeating the reason the category exists"
+        )
+        keys = {field["key"] for field in SPEC_SCHEMAS[category]}
+        assert "wattage" not in keys, (
+            f"{category!r} is hand-operated but its schema asks for a wattage"
+        )
