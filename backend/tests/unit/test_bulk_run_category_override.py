@@ -1,28 +1,24 @@
 """
 The category override, mirroring the existing Brand override.
 
-THE BUG THIS FIXES
--------------------
-A real row: SKU "AG-01", Name "Handy Pull Chopper" (Anex's actual product page
-title). The taxonomy has two separate categories -- "Chopper" (electric, wattage
-required) and "Hand Chopper" (hand-operated, no wattage field at all) -- and
-the title contains the word "chopper" but never "manual". Deterministic matching
-(`input_adapter.infer_category`) finds exactly one pattern match ("Chopper") and
-returns it confidently; the LLM fallback never runs because that path only
-triggers on zero matches, not a wrong single match. The product is then
-extracted against the electric Chopper schema, which requires a wattage a
-hand-operated chopper does not have.
+WHAT IT IS FOR
+--------------
+The taxonomy holds "Chopper" (electric, wattage required) and "Hand Chopper"
+(hand-operated, no wattage field). Most titles now resolve themselves: the
+hand-operated aliases read words like "Handy" or "Pull" that are actually in
+the text, and the specificity resolver picks the narrower category.
 
-WHY THIS IS THE RIGHT FIX (not LLM disambiguation)
-----------------------------------------------------
-"Manual" is not present anywhere in the source title. No amount of pattern
-matching, embedding search, or LLM reasoning over that string can recover
-information that was never in it -- an LLM asked to guess would be relying on
-its own memorized "knowledge" of a specific SKU ("AG-01"), which is exactly the
-ungrounded, unverifiable guess this codebase's no-hallucination contract exists
-to prevent everywhere else (see ExtractionResult.inferred_value and its
-required exact_quote evidence). The operator, who can see the real product,
-already has an equivalent override for Brand; Category gets the same one.
+This override covers what reading cannot. A title such as "Anex AG-01 Chopper"
+contains no signal at all about how the product is operated, and no pattern
+match, embedding search, or LLM reasoning can recover information that was
+never in the string -- an LLM asked to decide would be relying on memorised
+"knowledge" of a SKU, which is exactly the ungrounded guess this codebase
+refuses everywhere else (see ExtractionResult.inferred_value and its required
+exact_quote evidence).
+
+So the operator, who can see the real product, states it: the same contract as
+the existing Brand override, matched case-insensitively against live taxonomy
+and rejected outright if it names a category that does not exist.
 """
 from unittest.mock import AsyncMock, patch
 
@@ -57,19 +53,31 @@ async def _run(rows: list[dict]):
 
 
 @pytest.mark.asyncio
-async def test_without_an_override_the_bug_reproduces():
+async def test_the_real_anex_title_now_resolves_without_any_override():
     """
-    THE REGRESSION, pinned down. Without a Category column, "chopper" in the
-    title deterministically (and wrongly) resolves to the electric category.
-    If this ever stops reproducing, the override test below is not proving
-    what it claims to.
+    The original bug, now fixed upstream. "Handy Pull Chopper" used to resolve
+    to the electric "Chopper" (wattage required -> Manual Review). The
+    hand-operated aliases read "Handy"/"Pull" -- words actually in the title --
+    and the specificity resolver picks the narrower category.
+
+    The override below is now the correction path for titles that carry no such
+    word at all, not the only way to get this row right.
     """
     inputs, skipped = await _run([_row()])
     assert not skipped
-    assert inputs[0].category_name == "Chopper", (
-        "the deterministic bug no longer reproduces -- the override test's "
-        "premise has changed"
-    )
+    assert inputs[0].category_name == "Hand Chopper"
+
+
+@pytest.mark.asyncio
+async def test_a_title_with_no_hand_signal_still_needs_the_override():
+    """
+    The override's real remit: nothing in "Anex AG-01 Chopper" says
+    hand-operated, so no amount of reading can tell. It resolves to the
+    electric category and only the operator can correct it.
+    """
+    inputs, skipped = await _run([_row(Name="Anex AG-01 Chopper")])
+    assert not skipped
+    assert inputs[0].category_name == "Chopper"
 
 
 @pytest.mark.asyncio
@@ -105,6 +113,6 @@ async def test_an_unknown_category_is_rejected_not_passed_through():
 @pytest.mark.asyncio
 async def test_a_blank_category_column_falls_back_to_the_deterministic_guess():
     """An empty cell is not an override -- same rule as Brand's blank handling."""
-    inputs, skipped = await _run([_row(Category="  ")])
+    inputs, skipped = await _run([_row(Name="Anex AG-01 Chopper", Category="  ")])
     assert not skipped
     assert inputs[0].category_name == "Chopper"

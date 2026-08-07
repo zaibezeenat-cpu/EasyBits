@@ -221,6 +221,31 @@ _DEFAULT_CATEGORY_ALIASES: dict[str, list[str]] = {
     "led tv": [r"\bsmart\s*tv\b", r"\btv\b"],
     "vacuum cleaner": [r"\bvacuum\b"],
     "microwave oven": [r"\bmicrowave\b"],
+    # Hand-operated food prep. These carry real weight: a hand chopper has no
+    # motor, so the electric schema's required wattage can never be found and
+    # the product is routed to Manual Review for a fact it does not have.
+    #
+    # "Hand" alone does not match real titles -- Anex's own page calls the AG-01
+    # a "Handy Pull Chopper", where "Handy" is a different word and "Pull" is the
+    # actual mechanism. Each pattern below matches a word PRESENT in the title;
+    # nothing here deduces a product's nature from its SKU.
+    #
+    # Both the general and the hand category match such a title, and
+    # _most_specific resolves that to the hand one (its words are a strict
+    # superset). A plain "Chopper" matches nothing here and stays electric.
+    "hand chopper": [
+        r"\bhand[\s-]*chopper\b",
+        r"\bhandy\b[\w\s-]*\bchopper\b",
+        r"\bpull\b[\w\s-]*\bchopper\b",
+        r"\bmanual\b[\w\s-]*\bchopper\b",
+        r"\bhand[\s-]*held\b[\w\s-]*\bchopper\b",
+        r"\bnon[\s-]*electric\b[\w\s-]*\bchopper\b",
+    ],
+    "hand blender": [
+        r"\bhand[\s-]*blender\b",
+        r"\bmanual\b[\w\s-]*\bblender\b",
+        r"\bhand[\s-]*held\b[\w\s-]*\bblender\b",
+    ],
 }
 
 
@@ -237,7 +262,19 @@ _DEFAULT_CATEGORY_ALIASES: dict[str, list[str]] = {
 # frontend) to add a rule when a genuinely adjective-like category is created.
 #
 # Keyed by lowercased category name.
-_DEFAULT_CATEGORY_EXCLUSIONS: dict[str, list[str]] = {}
+_DEFAULT_CATEGORY_EXCLUSIONS: dict[str, list[str]] = {
+    # An immersion/stick blender is HELD in the hand but is very much motorised,
+    # so "hand held" alone would wrongly strip its wattage requirement. A stated
+    # wattage is decisive either way: a product that draws power has a motor and
+    # belongs on the electric category, whatever the marketing copy calls it.
+    #
+    # Erring toward the electric category is the safe direction -- it keeps the
+    # wattage REQUIRED, so a genuine hand-operated product misrouted here stops
+    # in Manual Review (visible, correctable via the Category column) instead of
+    # silently publishing with a requirement quietly dropped.
+    "hand blender": [r"\bimmersion\b", r"\bstick\b", r"\d+\s*(?:W|watts?)\b"],
+    "hand chopper": [r"\d+\s*(?:W|watts?)\b"],
+}
 
 
 def _derive_name_pattern(category_name: str) -> str:
