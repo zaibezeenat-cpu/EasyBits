@@ -1,19 +1,26 @@
 import pytest
-from app.graph.seo_validator import validate_seo_rules, expected_meta_cta
-from app.builders.short_description_renderer import render_short_description
-from app.builders.specs_renderer import render_specs_table
-from app.builders.description_merger import merge_description, merge_description_template_a
-from app.builders.seo_title_builder import build_seo_title, build_focus_keyword_field
-from app.builders.html_sanitizer import strip_lsi_keyword_formatting, strip_newlines_for_csv
+
 from app.builders.csv_assembler import (
-    assemble_csv_row,
     BrandCasingMismatchError,
     CategoryBreadcrumbError,
     CategoryCasingMismatchError,
+    assemble_csv_row,
 )
-from app.models.writer_output import WriterOutput, FAQPair
+from app.builders.description_merger import (
+    merge_description,
+    merge_description_template_a,
+)
+from app.builders.html_sanitizer import (
+    strip_lsi_keyword_formatting,
+    strip_newlines_for_csv,
+)
+from app.builders.seo_title_builder import build_focus_keyword_field, build_seo_title
+from app.builders.short_description_renderer import render_short_description
+from app.builders.specs_renderer import render_specs_table
+from app.graph.seo_validator import expected_meta_cta, validate_seo_rules
 from app.models.extraction import ExtractionResult, SourceCitation
 from app.models.taxonomy import CategorySpecSchema, SpecField
+from app.models.writer_output import FAQPair, WriterOutput
 
 FOCUS_KEYWORD = "Dawlance DW-131 Inverter Air Conditioner"  # full product type, never abbreviated
 WARRANTY_PHRASE = "1 Year Brand Warranty"
@@ -50,18 +57,18 @@ def _long_body(topic: str, keyword: str | None = None, sentences: int = 14) -> s
         if keyword else
         ("This model is engineered for demanding Pakistani conditions where "
          "reliability matters more than specifications on paper."),
-        f"{topic} is handled by components rated for continuous operation through "
-        f"long summer afternoons without loss of performance.",
-        "Installation is straightforward for any authorised technician and requires "
-        "no special modification to existing wiring or fittings.",
-        "Running costs stay predictable because the unit modulates its output "
-        "rather than switching abruptly between full power and standby.",
-        "Materials were selected for corrosion resistance, which matters in humid "
-        "coastal cities where cheaper units degrade within a couple of seasons.",
-        "Servicing is simple, with accessible panels and widely stocked spare parts "
-        "available through the official service network nationwide.",
-        "Noise output remains low enough for bedrooms, so comfort does not come at "
-        "the cost of a constant background hum during the night.",
+        (f"{topic} is handled by components rated for continuous operation through "
+        f"long summer afternoons without loss of performance."),
+        ("Installation is straightforward for any authorised technician and requires "
+        "no special modification to existing wiring or fittings."),
+        ("Running costs stay predictable because the unit modulates its output "
+        "rather than switching abruptly between full power and standby."),
+        ("Materials were selected for corrosion resistance, which matters in humid "
+        "coastal cities where cheaper units degrade within a couple of seasons."),
+        ("Servicing is simple, with accessible panels and widely stocked spare parts "
+        "available through the official service network nationwide."),
+        ("Noise output remains low enough for bedrooms, so comfort does not come at "
+        "the cost of a constant background hum during the night."),
     ]
     out = []
     while len(out) < sentences:
@@ -397,8 +404,8 @@ def test_short_description_paragraph_template(mock_writer_output):
     assert "<li>" not in html # Should not be a list anymore
 
 def test_specs_renderer_thead_and_styles():
-    from uuid import uuid4
     from datetime import datetime
+    from uuid import uuid4
     extraction = ExtractionResult(
         product_id=str(uuid4()),
         category_key="microwave",
@@ -442,14 +449,15 @@ def test_description_merger_uppercase_placeholders(mock_writer_output):
     assert WARRANTY_PHRASE in html
 
 def test_csv_assembler_brand_casing_lock_blocks_mismatch():
+    import uuid
+    from decimal import Decimal
+
     from app.graph.state import PipelineState
     from app.models.raw_input import RawProductInput
-    from decimal import Decimal
-    import uuid
 
     raw = RawProductInput(
         sku="SKU1", model_number="M1", brand_name="dawlance", category_name="Air conditioner",
-        product_type="AC", regular_price=Decimal("1000"), sale_price=Decimal("900"),
+        product_type="AC", regular_price=Decimal(1000), sale_price=Decimal(900),
     )
     state = PipelineState(product_id=uuid.uuid4(), batch_id=uuid.uuid4(), raw_input=raw, name="Test Name")
 
@@ -457,14 +465,15 @@ def test_csv_assembler_brand_casing_lock_blocks_mismatch():
         assemble_csv_row(state, "Home Appliance > Air conditioner", "dawlance", canonical_brand_name="DAWLANCE")
 
 def test_csv_assembler_requires_breadcrumb_parent():
+    import uuid
+    from decimal import Decimal
+
     from app.graph.state import PipelineState
     from app.models.raw_input import RawProductInput
-    from decimal import Decimal
-    import uuid
 
     raw = RawProductInput(
         sku="SKU1", model_number="M1", brand_name="DAWLANCE", category_name="Air conditioner",
-        product_type="AC", regular_price=Decimal("1000"), sale_price=Decimal("900"),
+        product_type="AC", regular_price=Decimal(1000), sale_price=Decimal(900),
     )
     state = PipelineState(product_id=uuid.uuid4(), batch_id=uuid.uuid4(), raw_input=raw, name="Test Name")
 
@@ -477,14 +486,15 @@ def test_csv_assembler_requires_breadcrumb_parent():
         assemble_csv_row(state, "Air conditioner", "DAWLANCE", canonical_brand_name="DAWLANCE")
 
 def test_csv_assembler_strips_newlines():
+    import uuid
+    from decimal import Decimal
+
     from app.graph.state import PipelineState
     from app.models.raw_input import RawProductInput
-    from decimal import Decimal
-    import uuid
 
     raw = RawProductInput(
         sku="SKU1", model_number="M1", brand_name="DAWLANCE", category_name="Air conditioner",
-        product_type="AC", regular_price=Decimal("1000"), sale_price=Decimal("900"),
+        product_type="AC", regular_price=Decimal(1000), sale_price=Decimal(900),
     )
     state = PipelineState(
         product_id=uuid.uuid4(), batch_id=uuid.uuid4(), raw_input=raw, name="Test Name",

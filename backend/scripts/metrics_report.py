@@ -1,7 +1,9 @@
-﻿import asyncio
-import argparse
+﻿import argparse
+import asyncio
 from uuid import UUID
+
 from app.db.repositories.products import products_repo
+
 
 async def generate_report(batch_id: UUID):
     products = await products_repo.get_by_batch(batch_id)

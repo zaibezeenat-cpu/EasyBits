@@ -4,10 +4,10 @@ the crashed product must be persisted as `failed` so it surfaces in the queue
 instead of silently staying `pending` forever.
 """
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from app.graph import batch_processor as bp
 

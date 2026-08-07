@@ -25,7 +25,7 @@ Trust order, and what counts as confirmed:
 A single unverified web page is never enough on its own; that is the whole point.
 """
 import re
-from typing import Literal, Optional, Protocol
+from typing import Literal, Protocol
 from urllib.parse import urlparse
 
 from pydantic import BaseModel
@@ -41,14 +41,14 @@ _UNKNOWN = "UNKNOWN"
 class _CitationLike(Protocol):
     field_name: str
     value: str
-    source_url: Optional[str]
+    source_url: str | None
     source_type: str
     confidence: str
 
 
 class FieldResolution(BaseModel):
     field_name: str
-    value: Optional[str]           # chosen ORIGINAL wording; None when unknown/conflict
+    value: str | None           # chosen ORIGINAL wording; None when unknown/conflict
     status: ResolutionStatus
     supporting_domains: list[str] = []
     conflicting_values: list[str] = []   # populated only when status == "conflict"
@@ -63,12 +63,12 @@ class FieldResolution(BaseModel):
 
 # Longer phrases first so "cubic feet" is folded before a stray "ft".
 _UNIT_REPLACEMENTS: tuple[tuple[re.Pattern, str], ...] = (
-    (re.compile(r"\bcubic\s*feet\b|\bcu\.?\s*ft\.?\b|\bcuft\b", re.I), "cuft"),
-    (re.compile(r"\blit(?:re|er)s?\b", re.I), "l"),
-    (re.compile(r"\bkilograms?\b|\bkgs?\b", re.I), "kg"),
-    (re.compile(r"\btons?\b", re.I), "ton"),
-    (re.compile(r"\bwatts?\b", re.I), "w"),
-    (re.compile(r"\binch(?:es)?\b", re.I), "in"),
+    (re.compile(r"\bcubic\s*feet\b|\bcu\.?\s*ft\.?\b|\bcuft\b", re.IGNORECASE), "cuft"),
+    (re.compile(r"\blit(?:re|er)s?\b", re.IGNORECASE), "l"),
+    (re.compile(r"\bkilograms?\b|\bkgs?\b", re.IGNORECASE), "kg"),
+    (re.compile(r"\btons?\b", re.IGNORECASE), "ton"),
+    (re.compile(r"\bwatts?\b", re.IGNORECASE), "w"),
+    (re.compile(r"\binch(?:es)?\b", re.IGNORECASE), "in"),
 )
 
 _DECIMAL = re.compile(r"\d+\.\d+")
@@ -121,11 +121,11 @@ def normalize_value(value: str) -> str:
     return _fold_volume_units(text)
 
 
-def _domain(url: Optional[str]) -> str:
+def _domain(url: str | None) -> str:
     if not url:
         return ""
     host = urlparse(url if "//" in url else f"//{url}").netloc.lower()
-    return host[4:] if host.startswith("www.") else host
+    return host.removeprefix("www.")
 
 
 class _Group:

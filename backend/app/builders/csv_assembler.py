@@ -1,10 +1,11 @@
 import csv
 import io
-from typing import List, Dict, Any
-from app.graph.state import PipelineState
+from typing import Any
+
 from app.builders.html_sanitizer import strip_newlines_for_csv
 from app.builders.internal_links import build_canonical_url, build_product_slug
 from app.builders.seo_title_builder import build_focus_keyword_field
+from app.graph.state import PipelineState
 
 COLUMN_ORDER = [
     "ID", "Type", "SKU", "Name", "slug", "Published", "Is featured?", "Visibility in catalog",
@@ -57,7 +58,7 @@ def assemble_csv_row(
     brand_name: str,
     canonical_brand_name: str | None = None,
     canonical_category_path: str | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Maps PipelineState to the 49-column WooCommerce CSV format.
 
@@ -196,9 +197,38 @@ def assemble_csv_row(
         "Meta: rank_math_canonical_url": canonical_url,
     }
 
-    return row
+    # --- Passthrough Data Overlay ---
+    # Overlay any user-provided columns from the original CSV that map to the final 51 columns.
+    # Note on Overwrite Logic:
+    # If the user provides a blank value (e.g. " "), `str(val).strip()` will evaluate to false,
+    # and the system will retain the AI-generated value. If there's a future need for users to 
+    # intentionally clear out a system-generated field by passing a blank space in the CSV,
+    # this `.strip()` check would need to be revisited or a specific clearing token introduced.
+    if p.passthrough_columns:
+        column_map = {c.lower(): c for c in COLUMN_ORDER}
+        for user_col, val in p.passthrough_columns.items():
+            matched_key = column_map.get(user_col.lower())
+            if matched_key and val and str(val).strip():
+                row[matched_key] = str(val).strip()
 
-def generate_csv_file(rows: List[Dict[str, Any]]) -> str:
+    # --- Chopper Alias (Phase 3) ---
+    # Convert 'Manual Chopper' to 'Chopper' on export so WooCommerce doesn't create duplicate categories.
+    if row.get("Categories") == "Kitchen Appliances > Manual Chopper":
+        row["Categories"] = "Kitchen Appliances > Chopper"
+
+    # --- Strict CSV Sanitization ---
+    # Strip literal line-breaks (\n, \r) and tab indentations (\t) from EVERY string field.
+    # This prevents column shifts when users copy-paste the generated CSV into Google Sheets.
+    sanitized_row = {}
+    for k, v in row.items():
+        if isinstance(v, str):
+            sanitized_row[k] = strip_newlines_for_csv(v)
+        else:
+            sanitized_row[k] = v
+
+    return sanitized_row
+
+def generate_csv_file(rows: list[dict[str, Any]]) -> str:
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=COLUMN_ORDER, quoting=csv.QUOTE_ALL)
     writer.writeheader()

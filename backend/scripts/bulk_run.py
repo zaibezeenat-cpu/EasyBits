@@ -30,17 +30,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.builders.category_classifier import llm_pick_category  # noqa: E402
-from app.builders.csv_assembler import generate_csv_file  # noqa: E402
-from app.builders.input_adapter import parse_sheet_row  # noqa: E402
-from app.api.routes.products import build_product_row  # noqa: E402
-from app.db.repositories.batches import batches_repo  # noqa: E402
-from app.db.repositories.brands import brands_repo  # noqa: E402
-from app.db.repositories.categories import categories_repo  # noqa: E402
-from app.db.repositories.products import products_repo  # noqa: E402
-from app.db.repositories.settings import settings_repo  # noqa: E402
-from app.graph.batch_processor import BatchProcessor  # noqa: E402
-from app.models.raw_input import RawProductInput  # noqa: E402
+from app.api.routes.products import build_product_row
+from app.builders.category_classifier import llm_pick_category
+from app.builders.csv_assembler import generate_csv_file
+from app.builders.input_adapter import parse_sheet_row
+from app.db.repositories.batches import batches_repo
+from app.db.repositories.brands import brands_repo
+from app.db.repositories.categories import categories_repo
+from app.db.repositories.products import products_repo
+from app.db.repositories.settings import settings_repo
+from app.graph.batch_processor import BatchProcessor
+from app.models.raw_input import RawProductInput
 
 
 def _pick(row: dict, *names: str) -> str:
@@ -69,17 +69,29 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
     skipped: list[str] = []
 
     for i, row in enumerate(rows, 1):
-        name = _pick(row, "Name", "Product", "Raw Product Data", "Model")
-        reg = _to_decimal(_pick(row, "Regular", "Regular Price"))
-        sale = _to_decimal(_pick(row, "Sale", "Sale Price"))
+        name = _pick(row, "Name", "Product", "Raw Product Data", "Model", "Title", "post_title", "Official_Model_Title")
+        reg_str = _pick(row, "Regular", "Regular Price", "Regular price", "Price", "Original_PRICE")
+        sale_str = _pick(row, "Sale", "Sale Price", "Sale price", "Sale_Price")
+        
+        reg = _to_decimal(reg_str)
+        sale = _to_decimal(sale_str)
+
+        # Smart price fallback logic (with rounding for e-commerce)
+        if reg is None and sale is not None:
+            # 20% markup, quantized to 0 decimal places (e.g. 4260.0 -> 4260)
+            reg = (sale * Decimal("1.20")).quantize(Decimal(1))
+        elif sale is None and reg is not None:
+            # No discount -> sale = reg
+            sale = reg
+
         if not name or reg is None or sale is None:
             skipped.append(f"row {i}: missing name or a price ({name!r})")
             continue
 
         parsed = parse_sheet_row(
             product_name=name, price_a=reg, price_b=sale,
-            warranty_text=_pick(row, "Warranty"),
-            status_text=_pick(row, "Status"),
+            warranty_text=_pick(row, "Warranty", "Warranty Details"),
+            status_text=_pick(row, "Status", "Template", "Template Choice"),
             known_brands=known_brands, known_categories=known_categories,
             category_parents=category_parents,
         )
@@ -87,7 +99,7 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
         # Brand: prefer an explicit "Brand" column (matched to the exact taxonomy
         # casing), else the brand inferred from the product name.
         brand_name = parsed.brand_name
-        brand_col = _pick(row, "Brand")
+        brand_col = _pick(row, "Brand", "Vendor", "Brand Name", "pa_brand")
         if brand_col:
             brand_name = next((b for b in known_brands if b.lower() == brand_col.lower()), None)
             if brand_name is None:
@@ -97,6 +109,12 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
         category = parsed.category_name
         if category is None:  # deterministic match failed -> LLM picks from the list
             category = await llm_pick_category(name, known_categories)
+
+        explicit_sku = _pick(row, "SKU")
+        if explicit_sku:
+            parsed.sku = explicit_sku
+            if not parsed.model_number:
+                parsed.model_number = explicit_sku
 
         if not brand_name or not category or not parsed.sku:
             missing = []
@@ -109,7 +127,7 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
             skipped.append(f"row {i}: could not resolve {', '.join(missing)} for {name!r}")
             continue
 
-        existing_id = _pick(row, "Existing ID", "Existing Id", "ID")
+        existing_id = _pick(row, "Existing ID", "Existing Id", "ID", "id")
         inputs.append(RawProductInput(
             sku=parsed.sku, model_number=parsed.model_number,
             brand_name=brand_name, category_name=category,
@@ -117,9 +135,10 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
             regular_price=parsed.regular_price, sale_price=parsed.sale_price,
             warranty_override=parsed.warranty_phrase,
             template_choice=parsed.template_choice or "B",
-            official_url=_pick(row, "Website Link", "Link", "URL") or None,
-            source_details=_pick(row, "Details") or None,
+            official_url=_pick(row, "Website Link", "Link", "URL", "Product_URL", "External URL") or None,
+            source_details=_pick(row, "Details", "Description", "Short description", "Clean_Description_Text", "Original_Item Description") or None,
             existing_id=existing_id or None,
+            passthrough_columns=dict(row),  # Capture entire row for passthrough overlay
         ))
 
     return inputs, skipped
@@ -156,7 +175,7 @@ async def run(input_path: str, output_path: str, strict: bool) -> None:
     with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
         f.write(generate_csv_file([p.csv_row for p in ready]))
 
-    print(f"\n===== DONE =====")
+    print("\n===== DONE =====")
     print(f"READY  -> {len(ready)} products written to {output_path}")
     print(f"REVIEW -> {len(review)} products need attention:")
     for p in review:

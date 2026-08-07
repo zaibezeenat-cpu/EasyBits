@@ -14,6 +14,7 @@ earlier phase1.md §9.1/§9.2 draft lists -- `Gaba National` is a real brand
 confirmed present in the live catalog's own sample export).
 """
 import asyncio
+
 from app.db.supabase_client import get_supabase
 
 # --- Brands (exact casing preserved, per the locked taxonomy rule) ---
@@ -77,26 +78,19 @@ BRAND_OFFICIAL_SITES: dict[str, str] = {
 # (never existed on the live site). A category not on this list routes the
 # product to Manual Review -- never created on the fly, since a stray taxonomy
 # term silently creates a new term in live WooCommerce on import.
-TOP_LEVEL = ["Beauty", "Home Appliance", "Item", "Kitchen Appliances"]
+TOP_LEVEL = ["Beauty", "Garment Streamer", "Home Appliance", "Item", "Kitchen Appliances"]
 
-# Home Appliance sub-categories, per the owner's live tree (2026-07-26).
-# NOTE: "Deerma" appears on the owner's list but is a MANUFACTURER, not a product
-# type; it was removed once before for exactly this reason (a brand-named category
-# creates a wrong WooCommerce term on export). It is deliberately HELD OUT here
-# pending the owner's explicit confirmation that it is a real category on their
-# site. "Electric Kettle" also exists under Kitchen Appliances -- the same name
-# under two parents is allowed by UNIQUE(name, parent_id) and matches the real
-# site, but is a known name-ambiguity for by-name category matching.
 HOME_APPLIANCE_CHILDREN = [
-    "Air conditioner", "Air cooler", "Air Purifier", "Citrus Juicer", "Deep Freezer",
-    "Electric Kettle", "Fans", "Food Chopper", "Garment Steam Iron", "Geyser",
-    "Hand Mixer", "Heater", "Hot Plate", "Insect Killer", "Led TV", "Microwave Oven",
-    "Refrigerator", "Sandwich Maker", "Table Blender", "Vacuum Cleaner",
-    "Washing machine", "Water Dispenser",
+    "Air conditioner", "Air cooler", "Air Purifier", "Deep Freezer",
+    "Deerma", "Fans", "Garment Steam Iron", "Geyser", "Heater", "Insect Killer",
+    "Led TV", "Microwave Oven", "Refrigerator", "Vacuum Cleaner", "Washing machine",
+    "Water Dispenser"
 ]
 
 KITCHEN_APPLIANCE_CHILDREN = [
-    "Air Fryer", "Blender", "Coffee Maker", "Electric Kettle", "Hotplate", "Oven Toaster",
+    "Air Fryer", "Blender", "Chopper", "Coffee Maker", "Cooker", "Electric Kettle",
+    "Food Processor", "Hotplate", "Juicer", "Grinder", "Mixer", "Oven Toaster",
+    "Pizza Pan", "Roti Maker", "Toaster", "Manual Chopper"
 ]
 
 # --- Category spec schemas -------------------------------------------------
@@ -170,14 +164,6 @@ SPEC_SCHEMAS = {
         ("capacity", "Capacity", True), ("wattage", "Wattage", True),
         ("functions", "Functions", False), ("features", "Features", False),
     ),
-    "Sandwich Maker": _spec(
-        ("wattage", "Wattage", True), ("plate_type", "Plate Type", False),
-        ("slices", "Number of Slices", False), ("features", "Features", False),
-    ),
-    "Hot Plate": _spec(
-        ("burners", "Number of Burners", True), ("wattage", "Wattage", False),
-        ("plate_type", "Plate Type", False), ("features", "Features", False),
-    ),
     "Hotplate": _spec(
         ("burners", "Number of Burners", True), ("wattage", "Wattage", False),
         ("plate_type", "Plate Type", False), ("features", "Features", False),
@@ -196,21 +182,16 @@ SPEC_SCHEMAS = {
         ("speeds", "Speeds", False), ("jar_material", "Jar Material", False),
         ("features", "Features", False),
     ),
-    "Table Blender": _spec(
-        ("capacity", "Jar Capacity", True), ("wattage", "Wattage", True),
-        ("speeds", "Speeds", False), ("jar_material", "Jar Material", False),
-        ("features", "Features", False),
-    ),
-    "Citrus Juicer": _spec(
-        ("wattage", "Wattage", True), ("capacity", "Capacity", False), ("features", "Features", False),
-    ),
-    "Food Chopper": _spec(
+    "Chopper": _spec(
         ("capacity", "Bowl Capacity", True), ("wattage", "Wattage", True),
         ("blades", "Blades", False), ("features", "Features", False),
     ),
-    "Hand Mixer": _spec(
-        ("wattage", "Wattage", True), ("speeds", "Speeds", False),
-        ("attachments", "Attachments", False), ("features", "Features", False),
+    "Manual Chopper": _spec(
+        ("capacity", "Bowl Capacity", False),
+        ("blades", "Blades", False),
+        ("operation_type", "Operation Type", False),
+        ("material", "Material", False),
+        ("features", "Features", False),
     ),
     # --- Home appliances ---
     "Fans": _spec(

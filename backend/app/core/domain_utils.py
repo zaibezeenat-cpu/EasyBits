@@ -78,8 +78,7 @@ def normalize_domain(raw: str) -> str:
 
     # Drop credentials and port from the host.
     host = host.split("@")[-1].split(":")[0]
-    if host.startswith("www."):
-        host = host[4:]
+    host = host.removeprefix("www.")
 
     # Tracking params and anchors are not part of a source's identity.
     path = path.split("?")[0].split("#")[0].rstrip("/")

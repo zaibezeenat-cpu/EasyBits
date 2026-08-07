@@ -1,5 +1,6 @@
 from app.models.writer_output import WriterOutput
 
+
 def render_short_description(writer_output: WriterOutput, product_name: str, category_name: str, warranty_phrase: str) -> str:
     """
     Renders the short description HTML (Phase 1 §7.2).

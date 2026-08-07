@@ -1,7 +1,8 @@
-from pydantic import BaseModel, ConfigDict
-from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
+
 
 class Brand(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -10,7 +11,7 @@ class Brand(BaseModel):
     # Optional display casing for the product TITLE only (e.g. "Haier"). The
     # Brands CSV column always uses `name`; only the title uses this when set.
     # Optional + defaulted so the app works before the migration is applied.
-    display_name: Optional[str] = None
+    display_name: str | None = None
     casing_confirmed: bool = False
     is_active: bool = True
     created_at: datetime
@@ -25,10 +26,10 @@ class Category(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     name: str
-    parent_id: Optional[UUID] = None
+    parent_id: UUID | None = None
     is_active: bool = True
     needs_confirmation: bool = True
-    notes: Optional[str] = None
+    notes: str | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Literal, Optional
+from typing import Literal
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
@@ -40,7 +40,7 @@ DEFAULT_PROVIDED_SOURCE_MODE: ProvidedSourceMode = "augment"
 
 class SnapshotStatus(BaseModel):
     sku_count: int
-    last_imported_at: Optional[str] = None
+    last_imported_at: str | None = None
 
 
 class SnapshotUploadResult(BaseModel):

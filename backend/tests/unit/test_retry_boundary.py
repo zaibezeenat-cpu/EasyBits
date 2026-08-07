@@ -1,9 +1,11 @@
-﻿from app.graph.state import PipelineState
-from app.graph.router import after_review_router
-from app.models.review_result import ReviewResult
-from app.models.raw_input import RawProductInput
+﻿from decimal import Decimal
 from uuid import uuid4
-from decimal import Decimal
+
+from app.graph.router import after_review_router
+from app.graph.state import PipelineState
+from app.models.raw_input import RawProductInput
+from app.models.review_result import ReviewResult
+
 
 def get_dummy_raw_input():
     return RawProductInput(
@@ -12,8 +14,8 @@ def get_dummy_raw_input():
         brand_name="B1",
         category_name="C1",
         product_type="T1",
-        regular_price=Decimal("100"),
-        sale_price=Decimal("90")
+        regular_price=Decimal(100),
+        sale_price=Decimal(90)
     )
 
 def test_after_review_router_retry_logic():

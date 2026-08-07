@@ -1,9 +1,11 @@
-﻿import asyncio
-import argparse
+﻿import argparse
+import asyncio
 import sys
 from uuid import UUID
-from app.db.repositories.products import products_repo
+
 from app.db.repositories.batches import batches_repo
+from app.db.repositories.products import products_repo
+
 
 async def check_batch(batch_id: UUID):
     print(f"--- Pilot Gate Check for Batch: {batch_id} ---")

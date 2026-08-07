@@ -19,11 +19,11 @@ from app.models.raw_input import RawProductInput
 
 
 def _raw(**overrides) -> RawProductInput:
-    base = dict(
-        sku="WF-6807", model_number="WF-6807", brand_name="Westpoint",
-        category_name="AC", product_type="Hair Straightener",
-        regular_price=Decimal("6400"), sale_price=Decimal("6400"),
-    )
+    base = {
+        "sku": "WF-6807", "model_number": "WF-6807", "brand_name": "Westpoint",
+        "category_name": "AC", "product_type": "Hair Straightener",
+        "regular_price": Decimal(6400), "sale_price": Decimal(6400),
+    }
     base.update(overrides)
     return RawProductInput(**base)
 

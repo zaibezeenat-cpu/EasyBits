@@ -6,6 +6,7 @@ the decision logic that every product passes through. The tests below focus on
 the branches that decide whether a product is published or held back, because
 those are the ones that can put wrong data on the live store.
 """
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -17,28 +18,26 @@ from app.models.extraction import ExtractionResult, SourceCitation
 from app.models.failure import FailureInfo
 from app.models.raw_input import RawProductInput
 from app.models.taxonomy import CategorySpecSchema, SpecField
-from datetime import datetime, timezone
-
 
 # --- Fixtures ---------------------------------------------------------------
 
 def _raw_input(**overrides) -> RawProductInput:
-    base = dict(
-        sku="KLU-12B03S",
-        model_number="KLU-12B03S",
-        brand_name="Kenwood",
-        category_name="Air conditioner",
-        product_type="Air conditioner",
-        regular_price=Decimal("150000"),
-        sale_price=Decimal("139999"),
-        warranty_override="1 Year Warranty",
-    )
+    base = {
+        "sku": "KLU-12B03S",
+        "model_number": "KLU-12B03S",
+        "brand_name": "Kenwood",
+        "category_name": "Air conditioner",
+        "product_type": "Air conditioner",
+        "regular_price": Decimal(150000),
+        "sale_price": Decimal(139999),
+        "warranty_override": "1 Year Warranty",
+    }
     base.update(overrides)
     return RawProductInput(**base)
 
 
 def _schema() -> CategorySpecSchema:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return CategorySpecSchema(
         id=uuid4(), category_id=uuid4(), created_at=now, updated_at=now,
         fields=[
@@ -49,7 +48,7 @@ def _schema() -> CategorySpecSchema:
 
 
 def _extraction(capacity_value="1 Ton", confidence="confirmed") -> ExtractionResult:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return ExtractionResult(
         product_id=str(uuid4()), category_key="air_conditioner",
         citations=[
@@ -62,7 +61,7 @@ def _extraction(capacity_value="1 Ton", confidence="confirmed") -> ExtractionRes
 
 
 def _state(**overrides) -> PipelineState:
-    base = dict(product_id=uuid4(), batch_id=uuid4(), raw_input=_raw_input())
+    base = {"product_id": uuid4(), "batch_id": uuid4(), "raw_input": _raw_input()}
     base.update(overrides)
     return PipelineState(**base)
 

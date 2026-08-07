@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from app.core.config import settings
@@ -46,7 +46,7 @@ MAX_TIER2_ATTEMPTS = 8
 MAX_CONSECUTIVE_EMPTY_DOMAINS = 5
 
 
-def _corroboration_satisfied(scraped_data: List[Dict[str, str]]) -> bool:
+def _corroboration_satisfied(scraped_data: list[dict[str, str]]) -> bool:
     """
     True once the sources in hand can already confirm facts, so further scraping
     cannot change any answer.
@@ -150,8 +150,8 @@ async def _follow_to_detail_page(search_result, model_number: str,
 
 
 async def scrape_product(
-    brand_name: str, model_number: str, tiers_to_run: Optional[tuple] = None
-) -> Dict[str, Any]:
+    brand_name: str, model_number: str, tiers_to_run: tuple | None = None
+) -> dict[str, Any]:
     """
     Discovers and scrapes sources for one product.
 
@@ -181,11 +181,11 @@ async def scrape_product(
         }
 
     # Preserve trust order while grouping the candidate URLs of each domain.
-    by_domain: Dict[str, List[Dict[str, str]]] = {}
+    by_domain: dict[str, list[dict[str, str]]] = {}
     for source in sources:
         by_domain.setdefault(source.get("domain") or source["url"], []).append(source)
 
-    scraped_data: List[Dict[str, str]] = []
+    scraped_data: list[dict[str, str]] = []
     # Tracks whether any source served an anti-bot / CAPTCHA challenge rather than
     # a real page. If nothing usable is scraped AND a block was seen, the operator
     # is told to paste Details -- the actionable truth -- instead of the misleading

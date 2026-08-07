@@ -1,7 +1,8 @@
-from pydantic import BaseModel, ConfigDict
-from uuid import UUID
 from datetime import datetime
-from typing import Optional, Literal
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
 
 
 class Template(BaseModel):
@@ -25,6 +26,6 @@ class TemplateCreate(BaseModel):
 
 
 class TemplateUpdate(BaseModel):
-    name: Optional[str] = None
-    html_skeleton: Optional[str] = None
-    is_active: Optional[bool] = None
+    name: str | None = None
+    html_skeleton: str | None = None
+    is_active: bool | None = None

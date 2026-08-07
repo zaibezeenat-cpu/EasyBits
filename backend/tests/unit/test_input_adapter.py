@@ -6,8 +6,9 @@ publishes a price INCREASE to customers as a discount. All fixtures below are
 real rows from the user's actual input sheet and their corresponding real CSV
 export, so these assert against ground truth rather than invented examples.
 """
-import pytest
 from decimal import Decimal
+
+import pytest
 
 from app.builders.input_adapter import (
     assign_prices,
@@ -67,25 +68,25 @@ def test_real_sheet_row_13_prices_match_real_csv_export():
     but the real exported CSV has Sale price=139999 and Regular price=150000.
     The headers are misleading; the values decide.
     """
-    regular, sale = assign_prices(Decimal("139999"), Decimal("150000"))
-    assert regular == Decimal("150000")
-    assert sale == Decimal("139999")
+    regular, sale = assign_prices(Decimal(139999), Decimal(150000))
+    assert regular == Decimal(150000)
+    assert sale == Decimal(139999)
 
 
 def test_real_sheet_row_14_prices_match_real_csv_export():
     """Sheet row 14 (Midea 18HRFN8): 199999 / 220000 -> Sale=199999, Regular=220000."""
-    regular, sale = assign_prices(Decimal("199999"), Decimal("220000"))
-    assert regular == Decimal("220000")
-    assert sale == Decimal("199999")
+    regular, sale = assign_prices(Decimal(199999), Decimal(220000))
+    assert regular == Decimal(220000)
+    assert sale == Decimal(199999)
 
 
 def test_sale_is_always_below_regular_regardless_of_argument_order():
     """The core guarantee: order of the two cells can never flip the roles."""
     for a, b in [
-        (Decimal("139999"), Decimal("150000")),
-        (Decimal("150000"), Decimal("139999")),
-        (Decimal("229999"), Decimal("250000")),
-        (Decimal("250000"), Decimal("229999")),
+        (Decimal(139999), Decimal(150000)),
+        (Decimal(150000), Decimal(139999)),
+        (Decimal(229999), Decimal(250000)),
+        (Decimal(250000), Decimal(229999)),
     ]:
         regular, sale = assign_prices(a, b)
         assert sale is not None
@@ -93,16 +94,16 @@ def test_sale_is_always_below_regular_regardless_of_argument_order():
 
 
 def test_equal_prices_mean_no_discount():
-    regular, sale = assign_prices(Decimal("99999"), Decimal("99999"))
-    assert regular == Decimal("99999")
+    regular, sale = assign_prices(Decimal(99999), Decimal(99999))
+    assert regular == Decimal(99999)
     assert sale is None, "equal prices are not a discount; sale must be omitted"
 
 
 def test_non_positive_price_is_rejected():
     with pytest.raises(ValueError):
-        assign_prices(Decimal("0"), Decimal("150000"))
+        assign_prices(Decimal(0), Decimal(150000))
     with pytest.raises(ValueError):
-        assign_prices(Decimal("-5"), Decimal("150000"))
+        assign_prices(Decimal(-5), Decimal(150000))
 
 
 # --- SKU extraction ---------------------------------------------------------
@@ -354,8 +355,8 @@ def test_category_aliases_can_be_supplied_externally():
 def test_parse_real_sheet_row_13_end_to_end():
     row = parse_sheet_row(
         product_name="Kenwood KLU-12B03S 1.0 Ton Luxury Ultra Inverter AC – T3 Cooling, WiFi, Energy Saving",
-        price_a=Decimal("139999"),
-        price_b=Decimal("150000"),
+        price_a=Decimal(139999),
+        price_b=Decimal(150000),
         warranty_text="10 Years Compressor Warranty; 5 Years All Parts Warranty",
         status_text="no description images here so used no images product description template",
         known_brands=REAL_BRANDS,
@@ -364,8 +365,8 @@ def test_parse_real_sheet_row_13_end_to_end():
     assert row.sku == "KLU-12B03S"
     assert row.brand_name == "Kenwood"
     assert row.category_name == "Air conditioner"
-    assert row.regular_price == Decimal("150000")
-    assert row.sale_price == Decimal("139999")
+    assert row.regular_price == Decimal(150000)
+    assert row.sale_price == Decimal(139999)
     assert row.sale_price < row.regular_price
     assert row.warranty_phrase == "10 Years Compressor Warranty; 5 Years All Parts Warranty"
     assert row.template_choice == "B"
@@ -375,8 +376,8 @@ def test_parse_real_sheet_row_13_end_to_end():
 def test_parse_real_sheet_row_14_end_to_end():
     row = parse_sheet_row(
         product_name="Midea 18HRFN8 Breezeless 1.5 Ton Inverter AC | R32 T3 | Heat & Cool | Official Warranty",
-        price_a=Decimal("199999"),
-        price_b=Decimal("220000"),
+        price_a=Decimal(199999),
+        price_b=Decimal(220000),
         warranty_text="10 years compressor warranty; 2 years parts warranty",
         status_text="Done with description images FOUND, SO MAKE A DESCRIPTION WITH IMAGE ONE",
         known_brands=REAL_BRANDS,
@@ -385,8 +386,8 @@ def test_parse_real_sheet_row_14_end_to_end():
     assert row.sku == "18HRFN8"
     assert row.brand_name == "Midea"
     assert row.category_name == "Air conditioner"
-    assert row.regular_price == Decimal("220000")
-    assert row.sale_price == Decimal("199999")
+    assert row.regular_price == Decimal(220000)
+    assert row.sale_price == Decimal(199999)
     assert row.warranty_phrase == "10 years compressor warranty; 2 years parts warranty"
     assert row.template_choice == "A"
     assert row.missing_required() == []
@@ -398,10 +399,10 @@ def test_all_four_real_sheet_rows_produce_sale_below_regular():
     price-swap bug across every real row at once.
     """
     real_rows = [
-        ("Kenwood KLU-12B03S 1.0 Ton Luxury Ultra Inverter AC", Decimal("139999"), Decimal("150000")),
-        ("Midea 18HRFN8 Breezeless 1.5 Ton Inverter AC", Decimal("199999"), Decimal("220000")),
-        ("Midea 24HRDN1 2 TON T3 Xtreme Eco Inverter Air Conditioner", Decimal("229999"), Decimal("250000")),
-        ("Midea 2 Ton MSEZ2C-24HRFN1 Xtreme Plus Inverter AC", Decimal("249999"), Decimal("265000")),
+        ("Kenwood KLU-12B03S 1.0 Ton Luxury Ultra Inverter AC", Decimal(139999), Decimal(150000)),
+        ("Midea 18HRFN8 Breezeless 1.5 Ton Inverter AC", Decimal(199999), Decimal(220000)),
+        ("Midea 24HRDN1 2 TON T3 Xtreme Eco Inverter Air Conditioner", Decimal(229999), Decimal(250000)),
+        ("Midea 2 Ton MSEZ2C-24HRFN1 Xtreme Plus Inverter AC", Decimal(249999), Decimal(265000)),
     ]
     for name, price_a, price_b in real_rows:
         row = parse_sheet_row(
@@ -425,8 +426,8 @@ def test_category_path_is_parent_then_subcategory():
     """
     row = parse_sheet_row(
         product_name="Kenwood KLU-12B03S 1 Ton Inverter AC",
-        price_a=Decimal("139999"),
-        price_b=Decimal("150000"),
+        price_a=Decimal(139999),
+        price_b=Decimal(150000),
         known_brands=REAL_BRANDS,
         known_categories=REAL_CATEGORIES,
         category_parents=REAL_CATEGORY_PARENTS,
@@ -440,8 +441,8 @@ def test_category_path_uses_the_real_parent_not_a_fixed_one():
     """Kitchen items must not be filed under Home Appliance."""
     row = parse_sheet_row(
         product_name="Anex AG-1234 Air Fryer",
-        price_a=Decimal("9999"),
-        price_b=Decimal("12999"),
+        price_a=Decimal(9999),
+        price_b=Decimal(12999),
         known_brands=REAL_BRANDS,
         known_categories=REAL_CATEGORIES,
         category_parents=REAL_CATEGORY_PARENTS,
@@ -452,8 +453,8 @@ def test_category_path_uses_the_real_parent_not_a_fixed_one():
 def test_category_path_falls_back_to_bare_name_for_top_level_category():
     row = parse_sheet_row(
         product_name="Some Beauty Item",
-        price_a=Decimal("100"),
-        price_b=Decimal("200"),
+        price_a=Decimal(100),
+        price_b=Decimal(200),
         known_categories=["Beauty"],
         category_parents={},
     )
@@ -464,8 +465,8 @@ def test_missing_required_reports_precise_reasons():
     """Unresolvable fields must be named individually so Manual Review is actionable."""
     row = parse_sheet_row(
         product_name="Samsung Mystery Appliance",
-        price_a=Decimal("1000"),
-        price_b=Decimal("2000"),
+        price_a=Decimal(1000),
+        price_b=Decimal(2000),
         known_brands=REAL_BRANDS,
         known_categories=REAL_CATEGORIES,
     )

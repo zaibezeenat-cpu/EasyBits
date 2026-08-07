@@ -13,7 +13,6 @@ value would trade one unverified number for another. A conflict is surfaced; a
 person decides.
 """
 import re
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -191,7 +190,7 @@ def build_source_text(scraped_data: list[dict]) -> str:
     return "\n".join(doc.get("content", "") for doc in (scraped_data or []))
 
 
-def warranty_conflict_detail(check: WarrantyCheck) -> Optional[str]:
+def warranty_conflict_detail(check: WarrantyCheck) -> str | None:
     """Returns an escalation reason when the check found a real disagreement."""
     if check.checked and not check.agrees:
         return check.detail

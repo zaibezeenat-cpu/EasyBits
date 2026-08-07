@@ -67,6 +67,7 @@ def test_single_source_value_is_not_confirmed():
 
 def test_single_source_required_field_is_flagged_for_review():
     from uuid import uuid4
+
     from app.models.taxonomy import CategorySpecSchema, SpecField
 
     now = datetime.now()

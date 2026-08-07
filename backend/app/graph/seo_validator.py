@@ -1,14 +1,14 @@
 import re
-from typing import List
-from app.models.writer_output import WriterOutput
-from app.models.review_result import SeoCheckResult
+
 from app.builders.name_builder import contains_forbidden_abbreviation
 from app.builders.seo_compliance import count_keyword_occurrences
-from app.builders.warranty_verifier import extract_durations
 from app.builders.seo_title_builder import (
     seo_title_contains_focus_keyword,
     title_ends_with_power_word,
 )
+from app.builders.warranty_verifier import extract_durations
+from app.models.review_result import SeoCheckResult
+from app.models.writer_output import WriterOutput
 
 # Keyword presence is measured two ways, because a long Boss-Rule product name
 # behaves differently from a short keyword:
@@ -58,7 +58,7 @@ def validate_seo_rules(
     category_name: str,
     expected_cta: str,
     secondary_keyword: str = "",
-) -> List[SeoCheckResult]:
+) -> list[SeoCheckResult]:
     """
     V8.0 Production Lock — Deterministic SEO checks.
 

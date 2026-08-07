@@ -1,6 +1,8 @@
 from datetime import datetime
-from app.models.extraction import ExtractionResult, SourceCitation
+
 from app.builders.dimensions_builder import build_dimensions
+from app.models.extraction import ExtractionResult, SourceCitation
+
 
 def test_dimensions_builder_net_to_gross_shipping():
     citation_weight = SourceCitation(

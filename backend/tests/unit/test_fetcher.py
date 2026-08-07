@@ -4,8 +4,9 @@ Tiered fetch: curl_cffi (Tier 1, fast TLS impersonation) -> Playwright+stealth
 Tier 1 is used only when it returns real product content; a block page, an empty
 JS shell (model missing), or curl being unavailable all escalate to Playwright.
 """
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from app.scraping import fetcher
 from app.scraping.models import ScrapeResult

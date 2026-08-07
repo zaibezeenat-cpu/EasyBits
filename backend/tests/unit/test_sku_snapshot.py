@@ -45,7 +45,7 @@ def test_parses_a_file_without_a_header():
 
 def test_excel_byte_order_mark_does_not_corrupt_the_first_sku():
     """Excel prefixes a BOM; decoding it as data would mangle the first row."""
-    raw = "﻿SKU\nKLU-12B03S\n".encode("utf-8")
+    raw = "﻿SKU\nKLU-12B03S\n".encode()
     parsed = parse_sku_csv(raw)
     assert parsed.had_header is True
     assert parsed.skus == ["KLU-12B03S"]

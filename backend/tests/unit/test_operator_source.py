@@ -6,13 +6,13 @@ authoritative source; a toggle chooses whether discovery still runs (augment) or
 skipped entirely (strict); a link that fails to scrape falls back to the pasted
 details; and a huge paste can never blow the token budget.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from unittest.mock import AsyncMock
 
 from app.graph import nodes
 from app.graph.state import PipelineState
@@ -21,22 +21,21 @@ from app.models.raw_input import RawProductInput
 from app.models.taxonomy import CategorySpecSchema, SpecField
 from app.scraping.playwright_client import _MAX_CLEANED_CONTENT_CHARS
 
-
 # --- fixtures ---------------------------------------------------------------
 
 def _raw(**overrides) -> RawProductInput:
-    base = dict(
-        sku="WF-6807", model_number="WF-6807", brand_name="Westpoint",
-        category_name="Air conditioner", product_type="Air conditioner",
-        regular_price=Decimal("6400"), sale_price=Decimal("6400"),
-        warranty_override="2 Years Warranty",
-    )
+    base = {
+        "sku": "WF-6807", "model_number": "WF-6807", "brand_name": "Westpoint",
+        "category_name": "Air conditioner", "product_type": "Air conditioner",
+        "regular_price": Decimal(6400), "sale_price": Decimal(6400),
+        "warranty_override": "2 Years Warranty",
+    }
     base.update(overrides)
     return RawProductInput(**base)
 
 
 def _schema() -> CategorySpecSchema:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return CategorySpecSchema(
         id=uuid4(), category_id=uuid4(), created_at=now, updated_at=now,
         fields=[SpecField(key="capacity", label="Capacity", required=True)],
@@ -44,7 +43,7 @@ def _schema() -> CategorySpecSchema:
 
 
 def _extraction() -> ExtractionResult:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return ExtractionResult(
         product_id=str(uuid4()), category_key="air_conditioner",
         citations=[SourceCitation(
@@ -62,7 +61,7 @@ def _scrape_ok(content="Deluxe Hair Straightener WF-6807 35 Watts 2 Years Warran
 
 
 def _state(**overrides) -> PipelineState:
-    base = dict(product_id=uuid4(), batch_id=uuid4(), raw_input=_raw())
+    base = {"product_id": uuid4(), "batch_id": uuid4(), "raw_input": _raw()}
     base.update(overrides)
     return PipelineState(**base)
 

@@ -1,5 +1,5 @@
 import time
-from typing import Any, Optional
+from typing import Any
 
 from app.db.supabase_client import get_supabase
 
@@ -38,7 +38,7 @@ class SettingsRepository:
         # this process never returns the pre-write value.
         self._cache[key] = (value, time.monotonic() + _TTL_SECONDS)
 
-    def invalidate(self, key: Optional[str] = None) -> None:
+    def invalidate(self, key: str | None = None) -> None:
         """Drop a cached key (or all). Exposed for tests and manual refresh."""
         if key is None:
             self._cache.clear()

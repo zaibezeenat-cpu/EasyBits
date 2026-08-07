@@ -13,7 +13,6 @@ from app.builders.internal_links import (
     slugify,
 )
 
-
 # --- URL construction -------------------------------------------------------
 
 def test_slugify_matches_wordpress_style():

@@ -24,7 +24,7 @@ search result, which is exactly what the no-hallucination contract needs.
 """
 import logging
 import re
-from typing import Dict, List, NamedTuple, Optional
+from typing import NamedTuple
 from urllib.parse import quote_plus, urlparse
 
 from app.db.repositories.sources import sources_repo
@@ -40,8 +40,7 @@ def _normalise_domain(url_or_domain: str) -> str:
     value = (url_or_domain or "").strip().lower()
     if "//" in value:
         value = urlparse(value).netloc
-    if value.startswith("www."):
-        value = value[4:]
+    value = value.removeprefix("www.")
     return value
 
 
@@ -93,8 +92,7 @@ def parse_source_scope(url_or_domain: str) -> SourceScope:
         host, _, rest = value.partition("/")
         path = f"/{rest}" if rest else ""
 
-    if host.startswith("www."):
-        host = host[4:]
+    host = host.removeprefix("www.")
 
     path = path.rstrip("/")
     if path and not path.startswith("/"):
@@ -108,7 +106,7 @@ def _identity_tokens(text: str) -> set[str]:
     return {t for t in re.split(r"[^a-z0-9]+", (text or "").lower()) if t}
 
 
-def model_matches_identity(model_number: str, url: str, titles: List[str]) -> bool:
+def model_matches_identity(model_number: str, url: str, titles: list[str]) -> bool:
     """
     True when a detail page IS about this exact model, judged by its identity
     (URL slug + title), not merely the body.
@@ -147,7 +145,7 @@ def model_matches_identity(model_number: str, url: str, titles: List[str]) -> bo
     return bool(distinctive) and all(t in identity for t in distinctive)
 
 
-def brand_matches_identity(brand_name: str, url: str, titles: List[str]) -> bool:
+def brand_matches_identity(brand_name: str, url: str, titles: list[str]) -> bool:
     """
     True when a product page identifies itself as belonging to `brand_name`.
 
@@ -204,7 +202,7 @@ def build_site_search_url(
     domain: str,
     brand_name: str,
     model_number: str,
-    template: Optional[str] = None,
+    template: str | None = None,
 ) -> str:
     """
     Builds an on-site search URL.
@@ -220,7 +218,7 @@ def build_site_search_url(
 
 
 def build_search_url_candidates(scope: "SourceScope | str", brand_name: str, model_number: str,
-                                known_template: Optional[str] = None) -> List[str]:
+                                known_template: str | None = None) -> list[str]:
     """
     All URLs worth trying for one scope, best-known first.
 
@@ -253,7 +251,7 @@ def build_search_url_candidates(scope: "SourceScope | str", brand_name: str, mod
     if known_template:
         templates.insert(0, known_template)
 
-    urls: List[str] = []
+    urls: list[str] = []
     if scope.path:
         urls.append(scope.base_url)
         urls.extend(build_site_search_url(scope.key, brand_name, model_number, t) for t in templates)
@@ -282,7 +280,7 @@ def search_result_mentions_product(content: str, model_number: str) -> bool:
     return normalise(model_number) in normalise(content)
 
 
-async def get_cached_search_templates() -> Dict[str, str]:
+async def get_cached_search_templates() -> dict[str, str]:
     """Per-domain templates previously proven to work; {} when none yet."""
     try:
         from app.db.repositories.settings import settings_repo
@@ -308,7 +306,7 @@ async def remember_working_template(domain: str, template: str) -> None:
         logger.warning(f"Could not cache search template for {domain}: {e}")
 
 
-def template_of_url(domain: str, url: str, brand_name: str, model_number: str) -> Optional[str]:
+def template_of_url(domain: str, url: str, brand_name: str, model_number: str) -> str | None:
     """
     Reverse-maps a URL back to the pattern that produced it, for caching.
 
@@ -327,7 +325,7 @@ def template_of_url(domain: str, url: str, brand_name: str, model_number: str) -
     return None
 
 
-async def _tier_search_engine(brand_name: str, model_number: str) -> List[Dict[str, str]]:
+async def _tier_search_engine(brand_name: str, model_number: str) -> list[dict[str, str]]:
     """Tier 1 — only active when a Firecrawl key is configured."""
     if not firecrawl_client.app:
         return []
@@ -339,20 +337,18 @@ async def _tier_search_engine(brand_name: str, model_number: str) -> List[Dict[s
     normalised_brand = re.sub(r"[^a-z0-9]", "", brand_name.lower())
     aliases = {_normalise_domain(a) for a in await sources_repo.get_brand_aliases(brand_name)}
 
-    sources: List[Dict[str, str]] = []
+    sources: list[dict[str, str]] = []
     for result in results:
         url = result.get("url")
         if not url:
             continue
         domain = _normalise_domain(url)
-        if normalised_brand and normalised_brand in domain.replace("-", "").replace(".", ""):
-            sources.append({"url": url, "source_type": "official"})
-        elif domain in aliases:
+        if normalised_brand and normalised_brand in domain.replace("-", "").replace(".", "") or domain in aliases:
             sources.append({"url": url, "source_type": "official"})
     return sources
 
 
-async def _tier_official_domain(brand_name: str, model_number: str) -> List[Dict[str, str]]:
+async def _tier_official_domain(brand_name: str, model_number: str) -> list[dict[str, str]]:
     """
     Tier 2 — the brand's own site, from `brand_domain_aliases`.
 
@@ -364,7 +360,7 @@ async def _tier_official_domain(brand_name: str, model_number: str) -> List[Dict
     """
     domains = await sources_repo.get_brand_aliases(brand_name)
     cached = await get_cached_search_templates()
-    sources: List[Dict[str, str]] = []
+    sources: list[dict[str, str]] = []
     for raw_domain in domains:
         if not raw_domain:
             continue
@@ -384,11 +380,11 @@ async def _tier_official_domain(brand_name: str, model_number: str) -> List[Dict
     return sources
 
 
-async def _tier_trusted_secondary(brand_name: str, model_number: str) -> List[Dict[str, str]]:
+async def _tier_trusted_secondary(brand_name: str, model_number: str) -> list[dict[str, str]]:
     """Tier 3 — retailer sites the owner has approved (Japan Electronics, Surmawala, ...)."""
     configured = await sources_repo.get_active_trusted_secondary_sources()
     cached = await get_cached_search_templates()
-    sources: List[Dict[str, str]] = []
+    sources: list[dict[str, str]] = []
     for entry in configured:
         if not entry.get("domain"):
             continue
@@ -409,7 +405,7 @@ GOOGLE_SEARCH_CACHE_KEY = "google_search_url_cache"
 _GOOGLE_CACHE_MAX_ENTRIES = 500
 
 
-async def _get_cached_google_urls(query: str) -> Optional[List[str]]:
+async def _get_cached_google_urls(query: str) -> list[str] | None:
     """Cached Google result URLs for a query, or None if never searched.
 
     Prevents the 100/day free-tier quota being burned on retries and on
@@ -427,7 +423,7 @@ async def _get_cached_google_urls(query: str) -> Optional[List[str]]:
     return None
 
 
-async def _cache_google_urls(query: str, urls: List[str]) -> None:
+async def _cache_google_urls(query: str, urls: list[str]) -> None:
     try:
         from app.db.repositories.settings import settings_repo
         cache = await settings_repo.get_setting(GOOGLE_SEARCH_CACHE_KEY)
@@ -444,7 +440,7 @@ async def _cache_google_urls(query: str, urls: List[str]) -> None:
 
 def classify_web_url(
     url: str, brand_alias_hosts: set[str], trusted_hosts: set[str], brand_name: str
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Types a Google result URL by its domain so trust order is preserved:
     a brand-owned host -> official, a configured retailer -> trusted_secondary,
@@ -465,7 +461,7 @@ def classify_web_url(
     return {"url": url, "source_type": source_type, "domain": domain, "is_direct": "true"}
 
 
-async def _tier_google_search(brand_name: str, model_number: str) -> List[Dict[str, str]]:
+async def _tier_google_search(brand_name: str, model_number: str) -> list[dict[str, str]]:
     """
     Broad web tier -- only active when a Google Programmable Search key is set.
 
@@ -494,7 +490,7 @@ async def _tier_google_search(brand_name: str, model_number: str) -> List[Dict[s
     mode = await settings_repo.get_setting("source_mode")
     strict = mode != "priority"  # default strict unless explicitly priority
 
-    sources: List[Dict[str, str]] = []
+    sources: list[dict[str, str]] = []
     for url in urls:
         typed = classify_web_url(url, brand_alias_hosts, trusted_hosts, brand_name)
         if strict and typed["source_type"] == "web":
@@ -510,8 +506,8 @@ GOOGLE_TIER = ("google_search",)
 
 
 async def resolve_sources(
-    brand_name: str, model_number: str, tiers_to_run: Optional[tuple] = None
-) -> List[Dict[str, str]]:
+    brand_name: str, model_number: str, tiers_to_run: tuple | None = None
+) -> list[dict[str, str]]:
     """
     Returns [{url, source_type}] ordered most-trusted first, or [] when no tier
     produced anything.
@@ -535,7 +531,7 @@ async def resolve_sources(
     if tiers_to_run is not None:
         tiers = tuple(t for t in tiers if t[0] in tiers_to_run)
 
-    collected: List[Dict[str, str]] = []
+    collected: list[dict[str, str]] = []
     for tier_name, tier_fn in tiers:
         try:
             found = await tier_fn(brand_name, model_number)
@@ -555,7 +551,7 @@ async def resolve_sources(
 
     # De-duplicate while preserving trust order.
     seen: set[str] = set()
-    unique: List[Dict[str, str]] = []
+    unique: list[dict[str, str]] = []
     for source in collected:
         if source["url"] not in seen:
             seen.add(source["url"])

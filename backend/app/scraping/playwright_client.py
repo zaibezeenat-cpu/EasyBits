@@ -3,9 +3,10 @@ import re
 
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
-from app.scraping.models import ScrapeResult
+
 from app.core.config import settings
 from app.core.logging import logger
+from app.scraping.models import ScrapeResult
 
 # BUG FIX (Phase 3 integration test, real LLM calls): raw page.content() is
 # the full HTML document -- scripts, styles, nav/footer boilerplate, inline
@@ -372,7 +373,7 @@ class PlaywrightEngine:
                     candidate_titles=titles,
                 )
             except Exception as e:
-                logger.error(f"Playwright error scraping {url}: {str(e)}")
+                logger.error(f"Playwright error scraping {url}: {e!s}")
                 return ScrapeResult(
                     url=url,
                     content="",

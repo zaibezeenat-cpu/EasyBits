@@ -57,7 +57,7 @@ def enforce_keyword_density(
     focus_keyword: str,
     replacement: str,
     secondary_keyword: str = "",
-    lsi_keywords: list[str] = None,
+    lsi_keywords: list[str] | None = None,
     max_density: float = KEYWORD_DENSITY_MAX,
     min_occurrences: int = MIN_KEYWORD_OCCURRENCES,
 ) -> WriterOutput:

@@ -16,19 +16,19 @@ FILLER = "It heats fast and glides smoothly for salon results at home. " * 24  #
 
 
 def _wo(**overrides) -> WriterOutput:
-    base = dict(
-        hero_heading=f"{FK} Overview",
-        hero_paragraph=f"The {FK} is premium. {FILLER} Buy the {FK} now. The {FK} shines.",
-        feature_headings=["Ceramic Plates", "Fast Heat"],
-        feature_texts=[f"{FK} plate detail.", f"{FK} heat detail."],
-        features_bullets=[f"{FK} bullet one", "Plain bullet two"],
-        faqs=[FAQPair(question=f"Q{i}?", answer=f"{FK} answer {i}.") for i in range(4)]
+    base = {
+        "hero_heading": f"{FK} Overview",
+        "hero_paragraph": f"The {FK} is premium. {FILLER} Buy the {FK} now. The {FK} shines.",
+        "feature_headings": ["Ceramic Plates", "Fast Heat"],
+        "feature_texts": [f"{FK} plate detail.", f"{FK} heat detail."],
+        "features_bullets": [f"{FK} bullet one", "Plain bullet two"],
+        "faqs": [FAQPair(question=f"Q{i}?", answer=f"{FK} answer {i}.") for i in range(4)]
         + [FAQPair(question="What is the official warranty?", answer="2 Years Warranty.")],
-        short_desc_feature_1="a", short_desc_feature_2="b", short_desc_feature_3="c",
-        rank_math_description="d" * 152,
-        lsi_keywords=["ceramic straightener", "hair styling tool", "flat iron"],
-        alt_text_1=FK, alt_text_2=FK, alt_text_3=FK,
-    )
+        "short_desc_feature_1": "a", "short_desc_feature_2": "b", "short_desc_feature_3": "c",
+        "rank_math_description": "d" * 152,
+        "lsi_keywords": ["ceramic straightener", "hair styling tool", "flat iron"],
+        "alt_text_1": FK, "alt_text_2": FK, "alt_text_3": FK,
+    }
     base.update(overrides)
     return WriterOutput(**base)
 
@@ -46,7 +46,7 @@ def _occ_density(wo: WriterOutput) -> tuple[int, float]:
 
 
 def test_overused_keyword_is_capped_below_ceiling():
-    before_occ, before_density = _occ_density(_wo())
+    _before_occ, before_density = _occ_density(_wo())
     assert before_density > 0.025, "fixture must start over the ceiling to be a real test"
 
     out = enforce_keyword_density(_wo(), FK, replacement="WF-6807", max_density=0.025)

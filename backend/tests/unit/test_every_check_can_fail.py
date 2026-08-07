@@ -47,13 +47,13 @@ def _body(mentions: int = 3, words: int = 640) -> str:
 
 
 def _writer(**overrides) -> WriterOutput:
-    base = dict(
-        hero_heading="Heading",
-        hero_paragraph=_body(),
-        feature_headings=["A", "B", "C"],
-        feature_texts=[_body(1), _body(1), _body(1)],
-        features_bullets=["one", "two", "three", "four"],
-        faqs=[
+    base = {
+        "hero_heading": "Heading",
+        "hero_paragraph": _body(),
+        "feature_headings": ["A", "B", "C"],
+        "feature_texts": [_body(1), _body(1), _body(1)],
+        "features_bullets": ["one", "two", "three", "four"],
+        "faqs": [
             FAQPair(question="Q1", answer="A1"),
             FAQPair(question="Q2", answer="A2"),
             FAQPair(question="Q3", answer="A3"),
@@ -61,11 +61,11 @@ def _writer(**overrides) -> WriterOutput:
             FAQPair(question="What is the official warranty?",
                     answer=f"It comes with a {WARRANTY} provided by Dawlance."),
         ],
-        short_desc_feature_1="a", short_desc_feature_2="b", short_desc_feature_3="c",
-        rank_math_description=_good_description(),
-        lsi_keywords=list(LSI),
-        alt_text_1=KEYWORD, alt_text_2=LSI[0], alt_text_3=LSI[1],
-    )
+        "short_desc_feature_1": "a", "short_desc_feature_2": "b", "short_desc_feature_3": "c",
+        "rank_math_description": _good_description(),
+        "lsi_keywords": list(LSI),
+        "alt_text_1": KEYWORD, "alt_text_2": LSI[0], "alt_text_3": LSI[1],
+    }
     base.update(overrides)
     return WriterOutput(**base)
 

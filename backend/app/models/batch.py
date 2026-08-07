@@ -1,7 +1,9 @@
-from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from uuid import UUID
 from enum import Enum
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
+
 
 class BatchStatus(str, Enum):
     PENDING = "pending"

@@ -1,5 +1,6 @@
 from app.db.supabase_client import get_supabase
 
+
 class CitationsRepository:
     async def create_many(self, citations: list[dict]):
         if not citations:

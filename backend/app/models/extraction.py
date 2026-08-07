@@ -1,6 +1,7 @@
-from pydantic import BaseModel, model_validator
 from datetime import datetime
-from typing import Literal, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
+
+from pydantic import BaseModel, model_validator
 
 if TYPE_CHECKING:
     from app.models.taxonomy import CategorySpecSchema
@@ -13,7 +14,7 @@ Confidence = Literal["confirmed", "conflicting", "unreachable"]
 class SourceCitation(BaseModel):
     field_name: str                    # matches SpecField.key
     value: str                         # literal "UNKNOWN" allowed
-    source_url: Optional[str] = None   # None only when confidence == "unreachable"
+    source_url: str | None = None   # None only when confidence == "unreachable"
     source_type: SourceType
     confidence: Confidence
     fetched_at: datetime
@@ -34,7 +35,7 @@ class ExtractionResult(BaseModel):
     # validator rejects outright ("is not valid 'regex'"), breaking the
     # Extractor's Groq fallback path every time it's needed. Never consumed as
     # a Decimal anywhere downstream, so float is strictly safer here.
-    scraped_official_price: Optional[float] = None
+    scraped_official_price: float | None = None
 
     def resolve(self, field_name: str):
         """
@@ -46,7 +47,7 @@ class ExtractionResult(BaseModel):
         from app.builders.fact_corroboration import resolve_field
         return resolve_field(field_name, self.citations)
 
-    def confirmed_value(self, field_name: str) -> Optional[str]:
+    def confirmed_value(self, field_name: str) -> str | None:
         """
         The value to use downstream, resolved across ALL sources.
 
@@ -63,7 +64,7 @@ class ExtractionResult(BaseModel):
         r = self.resolve(field_name)
         return r.value if r.is_confirmed else None
 
-    def single_source_value(self, field_name: str) -> Optional[str]:
+    def single_source_value(self, field_name: str) -> str | None:
         """The value when it rests on exactly one unverified source, else None.
 
         Used only to explain an escalation ("known from one source but not

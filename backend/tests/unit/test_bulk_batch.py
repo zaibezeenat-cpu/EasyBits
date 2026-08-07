@@ -6,11 +6,11 @@ rows carrying an existing_id are skipped (and audited) rather than overwriting a
 live product; an all-skipped batch does not start a pointless run.
 """
 from decimal import Decimal
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
-from unittest.mock import AsyncMock
 from starlette.background import BackgroundTasks
-from uuid import uuid4
 
 from app.api.routes import batches
 from app.api.routes.batches import BulkBatchRequest, create_batch_bulk
@@ -18,11 +18,11 @@ from app.models.raw_input import RawProductInput
 
 
 def _row(**overrides) -> RawProductInput:
-    base = dict(
-        sku="WF-6807", model_number="WF-6807", brand_name="Westpoint",
-        category_name="Air conditioner", product_type="Air conditioner",
-        regular_price=Decimal("6400"), sale_price=Decimal("6400"),
-    )
+    base = {
+        "sku": "WF-6807", "model_number": "WF-6807", "brand_name": "Westpoint",
+        "category_name": "Air conditioner", "product_type": "Air conditioner",
+        "regular_price": Decimal(6400), "sale_price": Decimal(6400),
+    }
     base.update(overrides)
     return RawProductInput(**base)
 

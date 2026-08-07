@@ -1,10 +1,13 @@
-﻿import pytest
+﻿from decimal import Decimal
+from uuid import uuid4
+
+import pytest
+
 from app.graph.nodes import image_fallback_node
 from app.graph.state import PipelineState
 from app.models.extraction import ExtractionResult
 from app.models.raw_input import RawProductInput
-from uuid import uuid4
-from decimal import Decimal
+
 
 def get_dummy_raw_input():
     return RawProductInput(
@@ -13,8 +16,8 @@ def get_dummy_raw_input():
         brand_name="B1",
         category_name="C1",
         product_type="T1",
-        regular_price=Decimal("100"),
-        sale_price=Decimal("90")
+        regular_price=Decimal(100),
+        sale_price=Decimal(90)
     )
 
 @pytest.mark.asyncio

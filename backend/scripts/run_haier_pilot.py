@@ -31,8 +31,8 @@ async def main():
         brand_name="HAIER",            # exact live-taxonomy casing
         category_name="Refrigerator",  # exact live-taxonomy casing
         product_type="Refrigerator",
-        regular_price=Decimal("90000"),
-        sale_price=Decimal("74999"),
+        regular_price=Decimal(90000),
+        sale_price=Decimal(74999),
         in_stock=True,
         template_choice="A",  # sheet says "Description complete" + images found
         warranty_override=(

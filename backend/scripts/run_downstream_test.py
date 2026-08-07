@@ -12,22 +12,26 @@ product, purely a fixture to exercise the real downstream code.
 """
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.db.repositories.batches import batches_repo
+from app.db.repositories.categories import categories_repo
 from app.db.repositories.products import products_repo
 from app.db.repositories.taxonomy import taxonomy_repo
-from app.db.repositories.categories import categories_repo
-from app.graph.state import PipelineState
-from app.graph.nodes import (
-    image_fallback_node, writer_node, reviewer_node,
-    deterministic_builders_node, html_sanitize_node,
-    duplicate_sku_guard_node, csv_row_assembler_node,
-)
 from app.graph.batch_processor import _final_state_to_product_update
-from app.models.raw_input import RawProductInput
+from app.graph.nodes import (
+    csv_row_assembler_node,
+    deterministic_builders_node,
+    duplicate_sku_guard_node,
+    html_sanitize_node,
+    image_fallback_node,
+    reviewer_node,
+    writer_node,
+)
+from app.graph.state import PipelineState
 from app.models.extraction import ExtractionResult, SourceCitation
+from app.models.raw_input import RawProductInput
 
 
 async def main():
@@ -41,8 +45,8 @@ async def main():
         brand_name="DAWLANCE",
         category_name="Microwave Oven",
         product_type="Microwave Oven",
-        regular_price=Decimal("29000"),
-        sale_price=Decimal("27500"),
+        regular_price=Decimal(29000),
+        sale_price=Decimal(27500),
         in_stock=True,
         template_choice="A",
         warranty_override="1 Year Official Warranty",
@@ -57,7 +61,7 @@ async def main():
         "in_stock": raw_input.in_stock,
     })
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     fixture_extraction = ExtractionResult(
         product_id=str(product.id),
         category_key="microwave_oven",

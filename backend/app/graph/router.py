@@ -1,5 +1,6 @@
 from app.graph.state import PipelineState
 
+
 def after_intake_router(state: PipelineState) -> str:
     """
     intake_triage's failure branches never set category_schema, and

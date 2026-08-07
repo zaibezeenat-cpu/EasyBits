@@ -12,7 +12,7 @@ def sanitize_html_fields(data: dict) -> dict:
     """
     fields_to_sanitize = ["short_description", "description", "specs_table_html"]
     for field in fields_to_sanitize:
-        if field in data and data[field]:
+        if data.get(field):
             data[field] = html.escape(data[field])
     return data
 
@@ -58,4 +58,4 @@ def strip_newlines_for_csv(text: str) -> str:
     """
     if not text:
         return text
-    return text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    return text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").replace("\t", " ")
