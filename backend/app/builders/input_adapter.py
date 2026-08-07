@@ -262,6 +262,10 @@ _DEFAULT_CATEGORY_ALIASES: dict[str, list[str]] = {
 # frontend) to add a rule when a genuinely adjective-like category is created.
 #
 # Keyed by lowercased category name.
+# A stated wattage means a motor, whatever the marketing copy calls the product.
+# The lookbehind is load-bearing: without it "AG-01W" reads as a wattage.
+_WATTAGE = r"(?<![\w-])\d{2,4}\s*(?:W\b|watts?\b)"
+
 _DEFAULT_CATEGORY_EXCLUSIONS: dict[str, list[str]] = {
     # An immersion/stick blender is HELD in the hand but is very much motorised,
     # so "hand held" alone would wrongly strip its wattage requirement. A stated
@@ -272,8 +276,18 @@ _DEFAULT_CATEGORY_EXCLUSIONS: dict[str, list[str]] = {
     # wattage REQUIRED, so a genuine hand-operated product misrouted here stops
     # in Manual Review (visible, correctable via the Category column) instead of
     # silently publishing with a requirement quietly dropped.
-    "hand blender": [r"\bimmersion\b", r"\bstick\b", r"\d+\s*(?:W|watts?)\b"],
-    "hand chopper": [r"\d+\s*(?:W|watts?)\b"],
+    # Both patterns are narrower than the obvious version, because the obvious
+    # version fires on ordinary words and silently undoes the fix:
+    #
+    #   \d+\s*W\b   also matched "AG-01W" -- on Pakistani SKUs a trailing W is
+    #               the White colour variant, so every white hand chopper was
+    #               being read as a 1-watt appliance. The lookbehind requires the
+    #               digits to start a token, which a model number's never do.
+    #   \bstick\b   also matched "Non Stick", which appears on a large share of
+    #               kitchen listings. Only "stick blender" -- the actual product
+    #               name -- should exclude.
+    "hand blender": [_WATTAGE, r"\bimmersion\b", r"\bstick\s*blender\b"],
+    "hand chopper": [_WATTAGE],
 }
 
 

@@ -99,3 +99,48 @@ def test_the_aliases_do_not_fire_without_the_category_in_the_taxonomy():
     rather than inventing a term that does not exist in the live store.
     """
     assert infer_category("Anex Handy Pull Chopper", ["Chopper"]) == "Chopper"
+
+
+# ---------------------------------------------------------------------------
+# EXCLUSION FALSE POSITIVES.
+#
+# The exclusions are what stop a motorised product being read as hand-operated.
+# Written carelessly they also fire on ordinary words, which silently undoes the
+# fix for a whole class of real SKUs. Both cases below were found by probing the
+# first version of these patterns, not by a user report.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("title", [
+    "Anex AG-01W Hand Chopper",             # W = White colour variant, not watts
+    "Anex AG-2095W Handy Pull Chopper",
+    "Anex AG-01W Hand Blender",
+])
+def test_a_model_number_ending_in_w_is_not_a_wattage(title: str):
+    """
+    "W" as a colour suffix (White) is common on Pakistani appliance SKUs. Read
+    as a wattage it drags every white variant onto the electric category.
+    """
+    cats = ["Chopper", "Hand Chopper", "Blender", "Hand Blender"]
+    assert infer_category(title, cats) in {"Hand Chopper", "Hand Blender"}
+
+
+@pytest.mark.parametrize("title", [
+    "Anex Hand Blender with Non Stick Jar",
+    "Anex Non-Stick Hand Blender",
+])
+def test_non_stick_is_not_a_stick_blender(title: str):
+    """
+    "Non Stick" appears on a large share of kitchen listings. Matching a bare
+    "stick" inside it excludes genuine hand blenders.
+    """
+    assert infer_category(title, BLENDERS) == "Hand Blender"
+
+
+def test_a_real_wattage_still_excludes():
+    """The exclusion must keep working for what it was written for."""
+    assert infer_category("Anex Hand Chopper 300W", CHOPPERS) == "Chopper"
+    assert infer_category("Anex Hand Blender 1000 Watts", BLENDERS) == "Blender"
+
+
+def test_a_real_stick_blender_still_excludes():
+    assert infer_category("Anex Stick Blender", BLENDERS) == "Blender"
