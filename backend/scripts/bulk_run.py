@@ -160,8 +160,22 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
                 skipped.append(f"row {i}: brand '{brand_col}' not in taxonomy for {name!r}")
                 continue
 
+        # Category: prefer an explicit "Category" column, same contract as the
+        # Brand override above. A bare product name genuinely cannot say "Manual
+        # Chopper" vs "Chopper" when the word "manual" is never in it (e.g. Anex's
+        # own title "Handy Pull Chopper") -- no pattern match, embedding, or LLM
+        # guess can recover information that was never in the text, and letting an
+        # LLM guess from a SKU/model number alone would be exactly the kind of
+        # unverifiable inference the rest of this pipeline refuses to publish. The
+        # operator can see the real product, so they state it directly instead.
         category = parsed.category_name
-        if category is None:  # deterministic match failed -> LLM picks from the list
+        category_col = _pick(row, "Category", "Product Category", "pa_category")
+        if category_col:
+            category = next((c for c in known_categories if c.lower() == category_col.lower()), None)
+            if category is None:
+                skipped.append(f"row {i}: category '{category_col}' not in taxonomy for {name!r}")
+                continue
+        elif category is None:  # deterministic match failed -> LLM picks from the list
             category = await llm_pick_category(name, known_categories)
 
         explicit_sku = _pick(row, "SKU")
