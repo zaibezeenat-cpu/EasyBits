@@ -1,3 +1,4 @@
+import math
 import re
 
 from app.builders.name_builder import contains_forbidden_abbreviation
@@ -23,6 +24,46 @@ from app.models.writer_output import WriterOutput
 #     when Rank Math's own meter still reads green.
 MIN_KEYWORD_OCCURRENCES = 3
 KEYWORD_DENSITY_MAX = 0.025
+
+# phase1.md §6.8 item 13's thin-content guard. A floor in its own right --
+# Google treats short product copy as thin however clean the keywords are --
+# but not always sufficient; see minimum_body_words.
+MIN_BODY_WORDS = 200
+
+
+def minimum_body_words(*, lsi_count: int, has_secondary: bool) -> int:
+    """The shortest body copy that can satisfy every check at once.
+
+    Three checks constrain the body together, and two of them force a MINIMUM
+    number of keyword matches: keyword_density_in_range needs the primary
+    keyword at least MIN_KEYWORD_OCCURRENCES times, lsi_keywords_present_in_body
+    needs each LSI keyword at least once, and ensure_lsi_in_body injects the
+    secondary. Those same matches are then divided by the word count and capped
+    at KEYWORD_DENSITY_MAX.
+
+    So a short body is not merely thin, it is arithmetically unwinnable. With
+    the usual 3 LSI keywords the mandatory matches total 7, which only fits
+    under 2.5% from 280 words up -- yet the old flat 200-word floor passed
+    anything above 200. Copy landing between the two was told by the reviewer
+    that its density was too high, fed that back to the writer, which removed
+    keyword mentions and then failed "primary >= 3" or "LSI present" instead.
+    Three attempts burned and the product reached Manual Review carrying a
+    density complaint whose real fix -- write more -- was never stated.
+
+    Args:
+        lsi_count: LSI keywords the writer returned (each must appear once).
+        has_secondary: Whether a secondary keyword is also being injected.
+
+    Returns:
+        The word count at or above which every check is simultaneously
+        satisfiable, never below the spec's thin-content floor.
+    """
+    required_matches = MIN_KEYWORD_OCCURRENCES + (1 if has_secondary else 0) + max(lsi_count, 0)
+    # ceil is a no-op at the current 2.5% (dividing by 1/40 always lands whole)
+    # -- kept because a ceiling like 3% would not, and rounding down there puts
+    # the floor back inside the dead zone by a word.
+    density_floor = math.ceil(required_matches / KEYWORD_DENSITY_MAX)
+    return max(MIN_BODY_WORDS, density_floor)
 
 # Category CTA templates (V8.0 Production Lock). Extend as new categories are onboarded.
 # {capacity} is filled with the product's ACTUAL extracted capacity (e.g. "1.0 Ton",
@@ -268,6 +309,13 @@ def validate_seo_rules(
     # threshold that turns it yellow/green; 2,500+ (its "green" ideal) is aimed
     # at pillar articles, not product pages, and is not enforced here.
     word_count = len(concatenated_content.split())
+    # The floor is not a constant, because the density check below imposes one
+    # of its own -- see minimum_body_words for why 200 alone left an unwinnable
+    # 200-279 word zone.
+    min_words = minimum_body_words(
+        lsi_count=len([k for k in writer_output.lsi_keywords if k.strip()]),
+        has_secondary=bool(secondary_keyword.strip()),
+    )
     results.append(SeoCheckResult(
         check_name="content_length_minimum",
         # phase1.md §6.8 item 13 locks the floor at 200 words (thin-content
@@ -275,8 +323,14 @@ def validate_seo_rules(
         # pages entirely (verified against rankmath.com/kb/score-100-in-tests),
         # so the earlier 600 was a false failure inherited from a misread of
         # Rank Math -- it escalated valid product copy on length alone.
-        passed=word_count >= 200,
-        detail=f"Body content is {word_count} words (spec floor is 200; product pages are exempt from Rank Math's own length test)."
+        passed=word_count >= min_words,
+        detail=(
+            f"Body content is {word_count} words (floor is {min_words}: the spec's "
+            f"{MIN_BODY_WORDS}-word thin-content guard, raised where needed so the "
+            f"{MIN_KEYWORD_OCCURRENCES} primary + secondary + LSI keyword mentions the other "
+            f"checks require still fit under the {KEYWORD_DENSITY_MAX * 100:.1f}% density "
+            f"ceiling). Product pages are exempt from Rank Math's own length test."
+        )
     ))
 
     # Keyword density = focus-keyword phrase occurrences RELATIVE TO TOTAL WORD
