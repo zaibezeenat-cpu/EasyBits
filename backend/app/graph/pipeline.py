@@ -13,9 +13,11 @@ from app.graph.nodes import (
     writer_node,
 )
 from app.graph.router import (
+    after_duplicate_sku_router,
     after_extractor_router,
     after_intake_router,
     after_review_router,
+    after_writer_router,
 )
 from app.graph.state import PipelineState
 
@@ -65,7 +67,18 @@ def create_pipeline():
     )
     
     workflow.add_edge("image_fallback_node", "writer_node")
-    workflow.add_edge("writer_node", "reviewer_node")
+    # Conditional, not a plain edge: writer_node has four failure branches and
+    # reviewer_node dereferences state.writer_output unconditionally, so a plain
+    # edge turned every writer failure into an AttributeError that buried the
+    # real reason. Same shape as every other node that can fail.
+    workflow.add_conditional_edges(
+        "writer_node",
+        after_writer_router,
+        {
+            "escalation": "escalation_handler",
+            "reviewer": "reviewer_node",
+        }
+    )
     
     workflow.add_conditional_edges(
         "reviewer_node",
@@ -79,7 +92,14 @@ def create_pipeline():
     
     workflow.add_edge("deterministic_builders_node", "html_sanitize_node")
     workflow.add_edge("html_sanitize_node", "duplicate_sku_guard_node")
-    workflow.add_edge("duplicate_sku_guard_node", "csv_row_assembler_node")
+    workflow.add_conditional_edges(
+        "duplicate_sku_guard_node",
+        after_duplicate_sku_router,
+        {
+            "escalation": "escalation_handler",
+            "assembler": "csv_row_assembler_node",
+        }
+    )
     workflow.add_edge("csv_row_assembler_node", END)
     workflow.add_edge("escalation_handler", END)
 

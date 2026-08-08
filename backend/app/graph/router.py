@@ -25,6 +25,37 @@ def after_extractor_router(state: PipelineState) -> str:
         
     return "image_fallback"
 
+def after_writer_router(state: PipelineState) -> str:
+    """
+    writer_node has four failure branches -- brand/category gone missing since
+    intake, no warranty phrase configured, the LLM call raising, and the SEO
+    guards -- and every one returns a clean FailureInfo. Without this router the
+    graph ran reviewer_node anyway, which dereferences state.writer_output and
+    raised AttributeError on None, so the writer's real reason was replaced by a
+    traceback and escalation_handler never filed the product.
+
+    The writer_output check is not redundant with the failure check: it also
+    covers a node that returns a partial state without flagging it.
+    """
+    if state.failure or state.manual_review_required:
+        return "escalation"
+    if not state.writer_output:
+        return "escalation"
+    return "reviewer"
+
+
+def after_duplicate_sku_router(state: PipelineState) -> str:
+    """
+    A colliding SKU is already doomed -- assembling its CSV row wastes the work
+    and persists a csv_row for a product that must never be exported. Contained
+    before this existed (manual_review_required maps to status="manual_review",
+    so it never reached the file) but the row should not be built at all.
+    """
+    if state.failure or state.manual_review_required:
+        return "escalation"
+    return "assembler"
+
+
 def after_review_router(state: PipelineState) -> str:
     """Retry logic: exactly 3 total attempts (Phase 2 §3.3)"""
     if state.manual_review_required or state.failure:
