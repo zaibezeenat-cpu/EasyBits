@@ -108,7 +108,11 @@ def test_every_product_category_has_a_spec_schema():
     """
     product_categories = {"Beauty", *HOME_APPLIANCE_CHILDREN, *KITCHEN_APPLIANCE_CHILDREN}
     missing = product_categories - set(SPEC_SCHEMAS)
-    expected_missing = {'Cooker', 'Deerma', 'Food Processor', 'Grinder', 'Juicer', 'Mixer', 'Pizza Pan', 'Roti Maker', 'Toaster'}
+    # Only Deerma remains, and it is a BRAND held out of the tree pending
+    # confirmation (see seed_taxonomy) -- no product is ever filed under it.
+    # The other seven were completed for the 296-product Anex run; without them
+    # 46 of those products escalated at intake for a schema that did not exist.
+    expected_missing = {'Deerma'}
     assert missing == expected_missing, f"product categories with unexpected missing schema status: {sorted(missing)}"
 
 
@@ -228,7 +232,16 @@ def test_every_pipeline_only_category_has_its_own_spec_schema():
             f"{category!r} has no spec schema -- its products will route to "
             f"Manual Review, defeating the reason the category exists"
         )
-        keys = {field["key"] for field in SPEC_SCHEMAS[category]}
-        assert "wattage" not in keys, (
-            f"{category!r} is hand-operated but its schema asks for a wattage"
-        )
+    # Only Hand Chopper is actually hand-operated. Hand Blender is an immersion
+    # blender -- motorised, so its schema REQUIRES a wattage. This assertion
+    # used to cover both and was asserting a mistake; see
+    # test_an_immersion_blender_IS_a_hand_blender.
+    chopper_keys = {field["key"] for field in SPEC_SCHEMAS["Hand Chopper"]}
+    assert "wattage" not in chopper_keys, (
+        "Hand Chopper is pull-cord operated but its schema asks for a wattage"
+    )
+    blender_keys = {field["key"] for field in SPEC_SCHEMAS["Hand Blender"]}
+    assert "wattage" in blender_keys, (
+        "Hand Blender is an immersion blender with a motor; its wattage is a "
+        "real, publishable spec and must be in the schema"
+    )

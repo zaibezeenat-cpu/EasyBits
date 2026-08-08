@@ -243,9 +243,43 @@ _DEFAULT_CATEGORY_ALIASES: dict[str, list[str]] = {
     ],
     "hand blender": [
         r"\bhand[\s-]*blender\b",
-        r"\bmanual\b[\w\s-]*\bblender\b",
+        r"\bimmersion\s*blender\b",
+        r"\bstick\s*blender\b",
         r"\bhand[\s-]*held\b[\w\s-]*\bblender\b",
     ],
+
+    # --- Categories whose OWN NAME never appears in a product title -----------
+    # Each of these is an existing taxonomy term; the titles simply use the
+    # product noun instead. Measured on the real 296-row Anex sheet: without
+    # these, ~50 products fell through to the LLM fallback, which sees only the
+    # same title and guesses. Anchored to words actually present -- no deduction.
+
+    # 30 products: dryers, straighteners, trimmers, curlers, shavers. The sheet
+    # spells it "Straightner", so both spellings are matched. "facial" is here
+    # because AG-7018 "Facial Steamer" is personal care, not garment care.
+    "beauty": [
+        r"\bhair\b",
+        r"\bstraight(?:e)?ner\b",
+        r"\bcurler\b",
+        r"\btrimmer\b",
+        r"\bshaver\b",
+        r"\bstyler\b",
+        r"\bfacial\b",
+        r"\bepilator\b",
+    ],
+
+    # 12 products: "Dry Iron", "Steam Iron", "Middle Weight Iron". The category
+    # name needs all three of its words, which no title supplies.
+    "garment steam iron": [r"\biron\b"],
+
+    # 6 products. The live store's term is "Streamer"; every title says
+    # "Steamer". Anchored to "garment" so a Facial Steamer is not swept in.
+    "garment streamer": [r"\bgarment\s*steamer\b"],
+
+    # 15 products, operator-directed: the store files sandwich and waffle makers
+    # under "Toaster". Note "Oven Toaster" is a different, larger appliance and
+    # matches on its own full name.
+    "toaster": [r"\bsandwich\b", r"\bwaffle\b"],
 }
 
 
@@ -286,8 +320,17 @@ _DEFAULT_CATEGORY_EXCLUSIONS: dict[str, list[str]] = {
     #   \bstick\b   also matched "Non Stick", which appears on a large share of
     #               kitchen listings. Only "stick blender" -- the actual product
     #               name -- should exclude.
-    "hand blender": [_WATTAGE, r"\bimmersion\b", r"\bstick\s*blender\b"],
+    # NOTE: there is deliberately NO "hand blender" entry. An earlier version
+    # excluded it on a stated wattage, on the assumption that "hand" meant
+    # hand-operated. Anex's own line disproves it -- "Hand Blender With Milk
+    # Frother", "With Titanium Blade", "With Beater" are all motorised immersion
+    # blenders, and a wattage CONFIRMS the category rather than ruling it out.
+    # Hand Chopper is the genuinely manual one ("Handy Pull Chopper", pull-cord).
     "hand chopper": [_WATTAGE],
+    # "Ceramic Fan Heater" and "Fan Air Cooler" both name the fan as a component,
+    # not the appliance -- without these they match Fans as well as their real
+    # category and the ambiguity guard rejects all six.
+    "fans": [r"\bfan\s*heater\b", r"\bheater\b", r"\bair\s*cooler\b"],
 }
 
 

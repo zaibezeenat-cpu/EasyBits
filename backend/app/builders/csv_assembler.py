@@ -44,6 +44,15 @@ COLUMN_ORDER = [
 #   Name, slug         -- deterministic Boss-Rule outputs, and slug feeds the
 #                         canonical URL
 #   Meta: rank_math_*  -- deterministic SEO fields the validator grades
+#   Sale price,
+#   Regular price      -- computed by bulk_run._resolve_prices from these very
+#                         columns: it strips the formatting, applies the
+#                         operator's 20% markup rule for single-price rows and
+#                         rejects a sale above regular. Letting the raw cell win
+#                         discarded all of that AND carried the sheet's own
+#                         thousands separator into the CSV -- measured on the
+#                         real Anex sheet, every row exported Sale price as the
+#                         string "1,550" instead of the number 1550.
 PASSTHROUGH_ALLOWED = frozenset({
     "Published", "Is featured?", "Visibility in catalog",
     "Date sale price starts", "Date sale price ends",
@@ -52,7 +61,6 @@ PASSTHROUGH_ALLOWED = frozenset({
     "Backorders allowed?", "Sold individually?",
     "Weight (kg)", "Length (cm)", "Width (cm)", "Height (cm)",
     "Allow customer reviews?", "Purchase note",
-    "Sale price", "Regular price",
     "Tags", "Shipping class", "Images",
     "Download limit", "Download expiry days",
     "Parent", "Grouped products", "Upsells", "Cross-sells",

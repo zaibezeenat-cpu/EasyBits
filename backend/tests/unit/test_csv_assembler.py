@@ -68,7 +68,7 @@ def test_assemble_csv_row_passthrough_overlay():
         product_type="Air Conditioner", regular_price=Decimal(100), sale_price=Decimal(90),
         passthrough_columns={
             "IMAGES": "http://example.com/img1.jpg, http://example.com/img2.jpg",
-            "sale price": "85.0",  # Test case-insensitive overwrite
+            "Sale Price": "1,550",  # the sheet's own formatting -- must NOT reach the row
             "Length (cm)": " ",     # Test blank skip
             "Unknown Col": "foo"   # Test ignoring unknown
         }
@@ -82,9 +82,13 @@ def test_assemble_csv_row_passthrough_overlay():
     
     row = assemble_csv_row(state, "Electronics > AC", "Haier", canonical_category_path="Electronics > AC")
     
-    # Overwritten by passthrough
+    # Overwritten by passthrough (case-insensitive header match)
     assert row["Images"] == "http://example.com/img1.jpg, http://example.com/img2.jpg"
-    assert row["Sale price"] == "85.0"
+
+    # NOT overwritten: prices left the allowlist. The sheet writes them the way a
+    # person types them ("1,550"), and that string was reaching the CSV in place
+    # of the number the pipeline computed -- see test_csv_formula_injection.
+    assert row["Sale price"] == 90.0
     
     # Not overwritten because value was blank (" ")
     assert row["Length (cm)"] == ""

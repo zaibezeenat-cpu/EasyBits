@@ -80,16 +80,27 @@ def test_a_hand_chopper_does_not_also_match_the_blender_family():
     assert infer_category("Anex Hand Blender", ALL_FOUR) == "Hand Blender"
 
 
-def test_an_immersion_blender_is_not_a_hand_blender():
+def test_an_immersion_blender_IS_a_hand_blender():
     """
-    A deliberate exclusion, and the reason "hand held" is scoped rather than
-    matched loosely. An immersion/stick blender is held in the hand but is very
-    much motorised -- treating it as hand-operated would strip its wattage
-    requirement. It stays on the electric category.
+    CORRECTED. This test previously asserted the opposite, on the assumption
+    that "hand" meant hand-operated for blenders as it does for choppers.
+
+    The operator's own catalogue disproves it: Anex sells "Hand Blender With
+    Milk Frother", "With Titanium Blade", "With Beater" (AG-121..AG-145) -- all
+    motorised immersion blenders. "Hand Blender", "immersion blender" and
+    "stick blender" are three names for the same appliance, and a stated
+    wattage CONFIRMS the category rather than ruling it out.
+
+    Hand Chopper remains the genuinely manual one -- "Handy Pull Chopper" is
+    worked by a pull cord and has no motor at all.
     """
-    assert infer_category("Anex Immersion Hand Held Stick Blender 400W", BLENDERS) == (
-        "Blender"
-    )
+    for title in (
+        "Anex Immersion Hand Held Stick Blender 400W",
+        "Anex Hand Blender 400 W",
+        "Anex Stick Blender",
+        "Anex Hand Blender With Milk Frother",
+    ):
+        assert infer_category(title, BLENDERS) == "Hand Blender", title
 
 
 def test_the_aliases_do_not_fire_without_the_category_in_the_taxonomy():
@@ -136,11 +147,13 @@ def test_non_stick_is_not_a_stick_blender(title: str):
     assert infer_category(title, BLENDERS) == "Hand Blender"
 
 
-def test_a_real_wattage_still_excludes():
-    """The exclusion must keep working for what it was written for."""
+def test_a_real_wattage_still_excludes_a_hand_CHOPPER():
+    """
+    The wattage exclusion survives, but only where it is true. A chopper that
+    draws power has a motor and is not the hand-operated variant. The same rule
+    is NOT applied to blenders -- see test_an_immersion_blender_IS_a_hand_blender.
+    """
     assert infer_category("Anex Hand Chopper 300W", CHOPPERS) == "Chopper"
-    assert infer_category("Anex Hand Blender 1000 Watts", BLENDERS) == "Blender"
 
 
-def test_a_real_stick_blender_still_excludes():
-    assert infer_category("Anex Stick Blender", BLENDERS) == "Blender"
+

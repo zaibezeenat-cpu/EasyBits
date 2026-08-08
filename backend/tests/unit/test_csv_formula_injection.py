@@ -123,3 +123,58 @@ def test_the_file_writer_neutralizes_rows_built_elsewhere():
 
     assert '"\'=1+1"' in out
     assert '"-1"' in out, "a numeric flag was escaped by the file writer"
+
+
+# ---------------------------------------------------------------------------
+# PRICES ARE NEVER TAKEN FROM PASSTHROUGH.
+#
+# Found by running the real Anex sheet end to end. The sheet writes prices the
+# way a person types them -- "1,550" -- and "Sale price" was in
+# PASSTHROUGH_ALLOWED, so that raw string overwrote the number the pipeline had
+# already computed. The exported row read:
+#
+#     Regular price   1860.0        <- computed, correct
+#     Sale price      '1,550'       <- the sheet's text, with a thousands comma
+#
+# WooCommerce parses prices with a locale-specific decimal separator; a comma
+# either fails the import or is read as a decimal point, turning Rs 1,550 into
+# Rs 1.55. Every product in a 296-row run carried it.
+#
+# The overlay is also redundant here: _resolve_prices already reads those exact
+# columns, strips the formatting, applies the operator's markup rule and the
+# sale-below-regular check. Letting the raw cell win discards all of that.
+# ---------------------------------------------------------------------------
+
+def test_a_comma_formatted_sheet_price_never_reaches_the_row():
+    """THE BUG, with the real value from the Anex sheet."""
+    row = assemble_csv_row(
+        _state(**{"Sale Price": "1,550", "Regular Price": "1,860"}),
+        "Electronics > AC", "Haier", canonical_category_path="Electronics > AC",
+    )
+    assert row["Sale price"] == 90.0, "the sheet's raw text overwrote the computed price"
+    assert row["Regular price"] == 100.0
+    for column in ("Sale price", "Regular price"):
+        assert "," not in str(row[column]), f"{column} carries a thousands separator"
+
+
+@pytest.mark.parametrize("column", ["Sale price", "Regular price"])
+def test_prices_are_not_passthrough_columns(column: str):
+    """
+    Guards the allowlist directly. A behavioural test alone would not stop
+    someone re-adding the entry, and the failure is silent in the CSV.
+    """
+    from app.builders.csv_assembler import PASSTHROUGH_ALLOWED
+
+    assert column not in PASSTHROUGH_ALLOWED, (
+        f"{column!r} is passthrough-writable, so the sheet's raw text overwrites "
+        f"the price _resolve_prices computed -- including its thousands commas"
+    )
+
+
+def test_the_computed_prices_are_numbers_not_strings():
+    """WooCommerce wants a bare number; a string is where the comma sneaks in."""
+    row = assemble_csv_row(
+        _state(), "Electronics > AC", "Haier", canonical_category_path="Electronics > AC",
+    )
+    assert isinstance(row["Regular price"], float)
+    assert isinstance(row["Sale price"], float)

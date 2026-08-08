@@ -196,12 +196,97 @@ SPEC_SCHEMAS = {
         ("material", "Material", False),
         ("features", "Features", False),
     ),
+    # An immersion / stick blender. ELECTRIC, unlike Hand Chopper -- Anex's own
+    # line reads "With Milk Frother", "With Titanium Blade", "With Beater", all
+    # motorised. It is separate from Blender only because it has no jug, so a
+    # jug Blender's required `capacity` cannot be demanded of it.
     "Hand Blender": _spec(
-        ("capacity", "Capacity", False),
+        ("wattage", "Wattage", True),
+        ("capacity", "Beaker Capacity", False),
+        ("speeds", "Speeds", False),
         ("blades", "Blades", False),
-        ("operation_type", "Operation Type", False),
         ("material", "Material", False),
         ("features", "Features", False),
+    ),
+    # Sandwich makers, waffle makers and sandwich/waffle/grill combos. Operator-
+    # directed: the live store files all of these under "Toaster".
+    "Toaster": _spec(
+        ("wattage", "Wattage", True),
+        ("slices", "Slices", False),
+        ("plate_type", "Plate Type", False),
+        ("features", "Features", False),
+    ),
+    # Handheld garment steamers. The live store spells the category "Streamer";
+    # every product title says "Steamer" (see the alias in input_adapter).
+    "Garment Streamer": _spec(
+        ("wattage", "Wattage", True),
+        ("capacity", "Water Tank Capacity", False),
+        ("steam_output", "Steam Output", False),
+        ("features", "Features", False),
+    ),
+    # CATCH-ALL, operator-directed. Products whose real category the live store
+    # does not carry (kitchen robots, egg beaters, BBQ grills, slicers) are filed
+    # under the parent rather than inventing a term WooCommerce has never seen.
+    #
+    # Only appliance_type is required: these products have nothing else in
+    # common, so demanding a wattage or a capacity of all of them would send the
+    # whole group to Manual Review -- the opposite of the point.
+    "Kitchen Appliances": _spec(
+        ("appliance_type", "Appliance Type", True),
+        ("wattage", "Wattage", False),
+        ("capacity", "Capacity", False),
+        ("material", "Material", False),
+        ("features", "Features", False),
+    ),
+    # --- Categories completed for the 296-product Anex run --------------------
+    # Each holds genuinely heterogeneous products, so only appliance_type is
+    # required. The titles show why: Mixer covers both "Hand Mixer" and "Stand
+    # Mixer 1500W 7L", Cooker covers "Rice Cooker 1.8L" and "Induction Cooker",
+    # and "Handy Food Processor" (AG-12) is hand-cranked while AG-1041 is not.
+    #
+    # A required field is a stop sign: if no source publishes it the product goes
+    # to Manual Review. Requiring a wattage across a group where a third of the
+    # products have no motor would fail them for a fact that does not exist. The
+    # optional fields below still PUBLISH whenever they are found -- optional
+    # means "do not block", not "do not extract".
+    "Grinder": _spec(
+        ("appliance_type", "Appliance Type", True),
+        ("wattage", "Wattage", False), ("grinder_type", "Wet / Dry", False),
+        ("jars", "Jars", False), ("material", "Body / Jar Material", False),
+        ("features", "Features", False),
+    ),
+    "Juicer": _spec(
+        ("appliance_type", "Appliance Type", True),
+        ("wattage", "Wattage", False), ("capacity", "Jug Capacity", False),
+        ("speeds", "Speeds", False), ("material", "Body Material", False),
+        ("features", "Features", False),
+    ),
+    "Cooker": _spec(
+        ("appliance_type", "Appliance Type", True),
+        ("capacity", "Capacity", False), ("wattage", "Wattage", False),
+        ("material", "Inner Pot Material", False),
+        ("features", "Features", False),
+    ),
+    "Mixer": _spec(
+        ("appliance_type", "Appliance Type", True),
+        ("wattage", "Wattage", False), ("capacity", "Bowl Capacity", False),
+        ("speeds", "Speeds", False), ("material", "Bowl Material", False),
+        ("features", "Features", False),
+    ),
+    "Food Processor": _spec(
+        ("appliance_type", "Appliance Type", True),
+        ("wattage", "Wattage", False), ("capacity", "Bowl Capacity", False),
+        ("attachments", "Attachments", False), ("features", "Features", False),
+    ),
+    "Roti Maker": _spec(
+        ("appliance_type", "Appliance Type", True),
+        ("wattage", "Wattage", False), ("plate_size", "Plate Size", False),
+        ("material", "Plate Material", False), ("features", "Features", False),
+    ),
+    "Pizza Pan": _spec(
+        ("appliance_type", "Appliance Type", True),
+        ("wattage", "Wattage", False), ("diameter", "Diameter", False),
+        ("material", "Surface Material", False), ("features", "Features", False),
     ),
     # --- Home appliances ---
     "Fans": _spec(
