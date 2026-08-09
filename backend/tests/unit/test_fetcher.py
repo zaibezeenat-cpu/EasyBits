@@ -244,3 +244,74 @@ async def test_escalation_records_both_tier_timings(monkeypatch):
     assert result.metadata["fetch_reason"] == "tier1_unavailable"
     assert "fetch_tier1_ms" in result.metadata
     assert "fetch_tier2_ms" in result.metadata
+
+
+# --- Overall per-URL deadline (2026-08-09, "why the delay even in strict mode") ---
+
+@pytest.mark.asyncio
+async def test_smart_fetch_times_out_at_the_configured_overall_deadline(monkeypatch):
+    """
+    Before this, ONE url had no combined cap -- curl's own timeout plus
+    Playwright's (attempts x per-attempt timeout) could add up to 150s with
+    no ceiling. smart_fetch must now bail at SCRAPE_TIMEOUT_SECONDS and
+    return a normal failed ScrapeResult, not hang or raise.
+    """
+    import asyncio
+
+    monkeypatch.setattr(fetcher.settings, "SCRAPE_TIMEOUT_SECONDS", 0.05)
+
+    async def _hangs_forever(*args, **kwargs):
+        await asyncio.sleep(10)
+        return _r("never gets here")
+
+    monkeypatch.setattr(fetcher, "_fetch_with_curl", _hangs_forever)
+
+    result = await fetcher.smart_fetch("https://slow.pk/p", "WF-6807")
+
+    assert result.success is False
+    assert result.metadata["fetch_reason"] == "overall_timeout"
+    assert result.error_message is not None
+    assert "0.05" in result.error_message
+
+
+@pytest.mark.asyncio
+async def test_smart_fetch_well_under_the_deadline_is_unaffected(monkeypatch):
+    """A normal fast fetch must not be touched by the deadline wrapper at all."""
+    monkeypatch.setattr(fetcher.settings, "SCRAPE_TIMEOUT_SECONDS", 5.0)
+    monkeypatch.setattr(fetcher, "_fetch_with_curl",
+                        AsyncMock(return_value=_r("WF-6807 in stock, 35 Watts")))
+
+    result = await fetcher.smart_fetch("https://fast.pk/p", "WF-6807")
+
+    assert result.success is True
+    assert result.metadata["fetch_tier"] == 1
+
+
+@pytest.mark.asyncio
+async def test_curl_fetch_uses_the_configured_timeout_not_a_hardcoded_30(monkeypatch):
+    """CURL_FETCH_TIMEOUT_SECONDS (default 15, down from a hardcoded 30) must
+    actually reach curl_cffi's request call."""
+    captured_kwargs = {}
+
+    class _FakeResponse:
+        text = "WF-6807 specs, 35 Watts"
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _FakeResponse()
+
+    fake_curl_cffi = type("_M", (), {"requests": type("_R", (), {"AsyncSession": _FakeSession})})
+    monkeypatch.setitem(__import__("sys").modules, "curl_cffi", fake_curl_cffi)
+    monkeypatch.setitem(__import__("sys").modules, "curl_cffi.requests", fake_curl_cffi.requests)
+    monkeypatch.setattr(fetcher.settings, "CURL_FETCH_TIMEOUT_SECONDS", 12.5)
+
+    await fetcher._fetch_with_curl("https://x.pk/p", "WF-6807")
+
+    assert captured_kwargs["timeout"] == 12.5

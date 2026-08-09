@@ -23,6 +23,7 @@ class _FakePage:
         self._owner = owner
 
     async def goto(self, url, **kwargs):
+        self._owner.tracker.goto_calls += 1
         if self._owner.tracker.goto_hangs:
             await asyncio.sleep(0.05)
         if self._owner.tracker.goto_raises:
@@ -105,6 +106,7 @@ class _Tracker:
         self.driver_stopped = False
         self.goto_raises = False
         self.goto_hangs = False
+        self.goto_calls = 0
 
 
 @pytest.fixture
@@ -274,3 +276,35 @@ def test_second_event_loop_does_not_break_scraping(monkeypatch):
         pc._playwright = None
         pc._browser = None
         pc._primitives_loop = None
+
+
+# --- Load-attempt count is now configurable, default 1 (2026-08-09) --------
+
+@pytest.mark.asyncio
+async def test_default_load_attempts_is_one_not_two(tracker, monkeypatch):
+    """
+    A second attempt at the SAME 60s timeout essentially never rescues a
+    genuinely slow site, only a transient blip -- at the cost of doubling the
+    worst case for every site that's actually just slow or blocked. Default
+    cut from a hardcoded 2 to settings.PLAYWRIGHT_LOAD_ATTEMPTS=1.
+    """
+    tracker.goto_raises = True
+
+    result = await pc.scrape_with_playwright("https://x.pk/slow", "WF-6807")
+
+    assert result.success is False
+    assert tracker.goto_calls == 1, "must not retry by default"
+
+
+@pytest.mark.asyncio
+async def test_load_attempts_setting_is_actually_honoured(tracker, monkeypatch):
+    """Raising the setting (e.g. for a known-flaky network) must actually
+    change how many times goto() is tried -- proves it's read live, not a
+    module-load-time constant that a settings change can't reach."""
+    monkeypatch.setattr(pc.settings, "PLAYWRIGHT_LOAD_ATTEMPTS", 3)
+    tracker.goto_raises = True
+
+    result = await pc.scrape_with_playwright("https://x.pk/slow", "WF-6807")
+
+    assert result.success is False
+    assert tracker.goto_calls == 3

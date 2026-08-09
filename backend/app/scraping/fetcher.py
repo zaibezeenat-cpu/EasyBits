@@ -31,10 +31,12 @@ So a missing model number is now split into two very different situations:
 "escalate" costs a few seconds, a wrong "accept" loses a real source and can
 push a product into Manual Review.
 """
+import asyncio
 import logging
 import time
 from typing import NamedTuple
 
+from app.core.config import settings
 from app.scraping.models import ScrapeResult
 from app.scraping.playwright_client import (
     _clean_html_to_text,
@@ -167,8 +169,12 @@ async def _fetch_with_curl(url: str, model_number: str = "") -> ScrapeResult | N
         async with AsyncSession() as session:
             # allow_redirects is on by default; set explicitly so HTTP->HTTPS
             # 301/302 always follow. impersonate mimics real Chrome's TLS/JA3.
+            # timeout: settings.CURL_FETCH_TIMEOUT_SECONDS (down from a
+            # hardcoded 30, 2026-08-09) -- see that setting's docstring.
             response = await session.get(
-                url, impersonate="chrome", timeout=30, allow_redirects=True
+                url, impersonate="chrome",
+                timeout=settings.CURL_FETCH_TIMEOUT_SECONDS,
+                allow_redirects=True,
             )
         html = response.text
     except Exception as e:
@@ -196,22 +202,42 @@ async def _fetch_with_curl(url: str, model_number: str = "") -> ScrapeResult | N
 async def smart_fetch(
     url: str, model_number: str = "", allow_tier2: bool = True
 ) -> ScrapeResult:
-    """Fetch a URL with the cheapest engine that works (Tier 1 -> Tier 2).
-
-    `allow_tier2=False` forbids the browser entirely and returns whatever Tier 1
-    produced, even when it is not good enough. That is the orchestrator's first
-    pass: sweep every domain cheaply, find the ones that answer outright, and
-    only then spend a browser on what is left. Returning the weak result rather
-    than None keeps the caller's block/mention/follow logic working on it.
-
-    The caller (orchestrator) still applies its own block/mention/follow logic on
-    the returned result, so a still-blocked Tier-2 result flows through to the
-    source_blocked / operator-Details fallback unchanged.
-
-    Timing and the tier-1 decision reason are attached to `result.metadata` so the
-    orchestrator can report, per product, how many fetches escalated and why --
-    the measurement that tells us whether this optimisation is actually working.
     """
+    Fetch a URL with the cheapest engine that works (Tier 1 -> Tier 2), bounded
+    by an OVERALL wall-clock deadline (settings.SCRAPE_TIMEOUT_SECONDS,
+    2026-08-09, owner-directed -- "why the delay even in strict mode").
+
+    Before this, ONE url could take up to CURL_FETCH_TIMEOUT_SECONDS (curl) +
+    PLAYWRIGHT_LOAD_ATTEMPTS x 60s (Playwright) with no combined cap -- and
+    that applies even to a single operator-pasted link in
+    provided_source_mode=strict, which still goes through this exact tiered
+    fetch. A timeout here is treated exactly like any other failed/blocked
+    fetch: the caller's existing fallback (operator Details, or simply an
+    unconfirmed field since 2026-08-09's Manual Review relaxation) takes over,
+    nothing raises.
+    """
+    try:
+        return await asyncio.wait_for(
+            _smart_fetch_inner(url, model_number, allow_tier2),
+            timeout=settings.SCRAPE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning(
+            f"smart_fetch exceeded the {settings.SCRAPE_TIMEOUT_SECONDS}s overall "
+            f"deadline for {url}; treating as a failed fetch."
+        )
+        return ScrapeResult(
+            url=url, content="", engine_used="timeout", success=False,
+            error_message=f"Exceeded overall {settings.SCRAPE_TIMEOUT_SECONDS}s fetch deadline",
+            metadata={"fetch_reason": "overall_timeout"},
+        )
+
+
+async def _smart_fetch_inner(
+    url: str, model_number: str, allow_tier2: bool
+) -> ScrapeResult:
+    """The actual tiered fetch; see smart_fetch's docstring for the deadline
+    wrapping this. Split out so asyncio.wait_for can cancel it cleanly."""
     tier1_started = time.perf_counter()
     tier1 = await _fetch_with_curl(url, model_number)
     tier1_ms = int((time.perf_counter() - tier1_started) * 1000)

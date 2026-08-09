@@ -21,10 +21,22 @@ _MAX_CLEANED_CONTENT_CHARS = 15000
 # Page-load budget in milliseconds. 30s was too short and failed EVERY real
 # scrape: the target Pakistani retailer sites serve ~600KB pages from slow
 # hosts, and a manual probe at 45s succeeded where 30s timed out. Raised with
-# headroom, and retried once, because a timeout here is indistinguishable
-# downstream from "this product has no data" -- the expensive failure mode.
+# headroom to 60s -- that finding is why this per-attempt value is UNCHANGED
+# here even though the retry count below was cut (2026-08-09): a genuinely
+# slow-but-real site needs a full 60s attempt at least once, that part of the
+# earlier fix stands.
 _PAGE_TIMEOUT_MS = 60000
-_LOAD_ATTEMPTS = 2
+
+# settings.PLAYWRIGHT_LOAD_ATTEMPTS, read live at the call site below
+# (2026-08-09, owner-directed, "why the delay even in strict mode"): was a
+# hardcoded 2. A SECOND attempt at the SAME 60s timeout essentially never
+# rescues a genuinely slow site -- if it needed more than 60s once, it needs
+# more than 60s again -- it only helps a transient network blip, at the cost
+# of doubling the worst case for every site that's actually just slow or
+# blocked (30s curl + 2x60s Playwright = up to 150s for ONE url, even with
+# discovery entirely off). Default cut to 1; the overall per-fetch deadline
+# in fetcher.py's smart_fetch() is the real safety net now, not an internal
+# retry. Configurable so a real transient-network environment can restore 2.
 
 
 def extract_product_links(html: str, base_url: str, model_number: str) -> list[str]:
@@ -345,7 +357,11 @@ class PlaywrightEngine:
                 # indefinitely on many real sites) -- "domcontentloaded" is what
                 # the content actually needs and is far more reliable in practice.
                 last_error: Exception | None = None
-                for attempt in range(_LOAD_ATTEMPTS):
+                # Read live (not the cached module constant) so a settings
+                # change -- or a test's monkeypatch -- takes effect without
+                # reimporting this module.
+                load_attempts = settings.PLAYWRIGHT_LOAD_ATTEMPTS
+                for attempt in range(load_attempts):
                     try:
                         await page.goto(url, wait_until="domcontentloaded", timeout=_PAGE_TIMEOUT_MS)
                         last_error = None
@@ -353,7 +369,7 @@ class PlaywrightEngine:
                     except Exception as e:
                         last_error = e
                         logger.warning(
-                            f"Page load attempt {attempt + 1}/{_LOAD_ATTEMPTS} failed for {url}: {e}"
+                            f"Page load attempt {attempt + 1}/{load_attempts} failed for {url}: {e}"
                         )
                 if last_error is not None:
                     raise last_error
