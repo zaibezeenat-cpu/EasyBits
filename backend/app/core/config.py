@@ -27,6 +27,17 @@ class Settings(BaseSettings):
     GOOGLE_SEARCH_CX: str | None = None
 
     # Pipeline Logic
+
+    # 2026-08-09 (owner-directed): raised from a hardcoded 3. A product that
+    # still fails SEO/fact checks after every attempt now SHIPS instead of
+    # going to Manual Review (see after_review_router) -- so the right lever
+    # for actually meeting Rank Math's rules is trying harder before that
+    # point, not blocking export. Each retry re-runs the full Writer+Reviewer
+    # cycle with the previous failure's specific reasons fed back into the
+    # prompt (writer_node's `feedback` var), so more attempts is a real
+    # second chance, not a repeat of the same output.
+    MAX_WRITER_REVIEWER_ATTEMPTS: int = 5
+
     LLM_INTER_PRODUCT_DELAY_SECONDS: float = 1.0
 
     # How many products run through the pipeline at once. 1 (default)

@@ -1,3 +1,4 @@
+from app.core.config import settings
 from app.graph.state import PipelineState
 
 
@@ -61,27 +62,28 @@ def after_duplicate_sku_router(state: PipelineState) -> str:
 
 
 def after_review_router(state: PipelineState) -> str:
-    """Retry logic: up to 3 Writer/Reviewer attempts (Phase 2 §3.3)"""
+    """Retry logic: up to MAX_WRITER_REVIEWER_ATTEMPTS Writer/Reviewer attempts."""
     if state.manual_review_required or state.failure:
         return "escalation"
 
     if state.review_result and state.review_result.passed:
         return "builders"
 
-    # writer_node increments retry_count BEFORE reviewer runs, so by the time this
-    # router checks, retry_count already reflects "attempts made so far":
-    # attempt 1 -> retry_count=1 -> 1<3 -> writer (attempt 2)
-    # attempt 2 -> retry_count=2 -> 2<3 -> writer (attempt 3)
-    # attempt 3 -> retry_count=3 -> 3<3 false -> builders
-    # This gives up to 3 total Writer/Reviewer attempts (was capped at 2 — off-by-one, fixed).
-    if state.retry_count < 3:
+    # writer_node increments retry_count BEFORE reviewer runs, so by the time
+    # this router checks, retry_count already reflects "attempts made so far"
+    # (e.g. at the default of 5: attempt 1 -> retry_count=1 -> 1<5 -> writer
+    # (attempt 2) ... attempt 5 -> retry_count=5 -> 5<5 false -> builders).
+    # 2026-08-09 (owner-directed): raised from a hardcoded 3 to
+    # settings.MAX_WRITER_REVIEWER_ATTEMPTS -- see that setting's docstring
+    # for why "try harder" is now the right lever instead of "block export".
+    if state.retry_count < settings.MAX_WRITER_REVIEWER_ATTEMPTS:
         return "writer"
 
-    # 2026-08-09 (owner-directed): retry exhaustion no longer escalates to
-    # Manual Review -- the SEO/fact-check gate (17 checks in seo_validator.py
-    # plus the reviewer's semantic pass) was the single most common real-world
-    # escalation reason. The product ships with whatever the 3rd attempt
-    # produced; reviewer_node still records review_result.passed=False and the
-    # specific failed checks on the product row, so a low-quality write-up is
-    # visible in the QA panel/product record, it just no longer blocks export.
+    # Retry exhaustion still does not escalate to Manual Review -- the
+    # SEO/fact-check gate was the single most common real-world escalation
+    # reason. The product ships with whatever the last attempt produced;
+    # review_result.passed=False and the specific failed checks are still
+    # persisted on the product row, and the frontend (Products page) shows a
+    # visible "SEO check failed" badge from that same data, so this is
+    # impossible to miss without blocking export.
     return "builders"

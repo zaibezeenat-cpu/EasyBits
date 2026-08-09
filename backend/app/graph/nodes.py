@@ -37,6 +37,7 @@ from app.builders.warranty_verifier import (
     verify_warranty,
     warranty_conflict_detail,
 )
+from app.core.config import settings
 from app.core.llm_provider import llm_provider
 from app.db.repositories.brands import brands_repo
 from app.db.repositories.categories import categories_repo
@@ -765,16 +766,19 @@ async def reviewer_node(state: PipelineState) -> dict[str, Any]:
 
         result: dict[str, Any] = {"review_result": review_result}
 
-        # 2026-08-09 (owner-directed): retry exhaustion (retry_count >= 3) no
-        # longer escalates -- after_review_router now sends it to "builders"
-        # regardless of `passed`. review_result (with its per-check pass/fail
-        # detail) is still returned and persisted on the product row, so the
-        # reason a product didn't cleanly pass every SEO/fact check stays
+        # 2026-08-09 (owner-directed): retry exhaustion no longer escalates --
+        # after_review_router now sends it to "builders" regardless of
+        # `passed` once retry_count reaches MAX_WRITER_REVIEWER_ATTEMPTS
+        # (raised from a hardcoded 3, see that setting's docstring).
+        # review_result (with its per-check pass/fail detail) is still
+        # returned and persisted on the product row -- and surfaced as a
+        # visible badge on the Products page and product detail page -- so
+        # the reason a product didn't cleanly pass every SEO/fact check stays
         # visible; it just no longer blocks the CSV from being produced.
-        if not all_passed and state.retry_count >= 3:
+        if not all_passed and state.retry_count >= settings.MAX_WRITER_REVIEWER_ATTEMPTS:
             logger.warning(
-                f"Writer/Reviewer exhausted 3 attempts for {state.raw_input.sku} "
-                f"without passing every check ({review_result.failure_summary}); "
+                f"Writer/Reviewer exhausted {settings.MAX_WRITER_REVIEWER_ATTEMPTS} attempts "
+                f"for {state.raw_input.sku} without passing every check ({review_result.failure_summary}); "
                 f"shipping the last attempt rather than escalating."
             )
 

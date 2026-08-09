@@ -54,18 +54,38 @@ function ProductsPageInner() {
                 </tr>
               </thead>
               <tbody>
-                {products.map((p) => (
-                  <tr key={p.id} className="border-b border-border last:border-0">
-                    <td className="py-2 font-mono text-xs">{p.sku}</td>
-                    <td className="py-2">{p.name || p.model_number}</td>
-                    <td className="py-2 text-textSecondary uppercase text-xs">{p.status}</td>
-                    <td className="py-2">
-                      <Link href={`/products/${p.id}`} className="text-accent hover:underline">
-                        Review
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
+                {products.map((p) => {
+                  // A product can reach "ready_for_qa" after exhausting every
+                  // Writer/Reviewer retry without fully passing Rank Math/fact
+                  // checks (backend/app/graph/router.py -- it ships rather than
+                  // blocking export). review_result.passed=False plus the
+                  // specific failed checks are already persisted; this is that
+                  // data surfaced as a badge instead of being buried in a JSON
+                  // blob nobody opens.
+                  const seoFailed = p.review_result && p.review_result.passed === false;
+                  return (
+                    <tr key={p.id} className="border-b border-border last:border-0">
+                      <td className="py-2 font-mono text-xs">{p.sku}</td>
+                      <td className="py-2">{p.name || p.model_number}</td>
+                      <td className="py-2 text-textSecondary uppercase text-xs">
+                        <span>{p.status}</span>
+                        {seoFailed && (
+                          <span
+                            className="ml-2 inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold normal-case bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                            title={p.review_result?.failure_summary || "Did not pass every SEO/fact check after all retries"}
+                          >
+                            SEO check failed
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2">
+                        <Link href={`/products/${p.id}`} className="text-accent hover:underline">
+                          Review
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}

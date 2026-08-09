@@ -241,15 +241,23 @@ def test_extractor_router_proceeds_when_required_fields_present():
     assert router.after_extractor_router(state) == "image_fallback"
 
 
-@pytest.mark.parametrize("retry_count,expected", [(1, "writer"), (2, "writer"), (3, "builders")])
-def test_review_router_allows_up_to_three_attempts_then_ships(retry_count, expected):
+@pytest.mark.parametrize("retry_count,expected", [(1, "writer"), (2, "writer"), (4, "writer"), (5, "builders")])
+def test_review_router_allows_up_to_the_configured_attempts_then_ships(retry_count, expected):
     """
-    Up to 3 Writer/Reviewer attempts (an off-by-one here previously capped it
-    at 2). 2026-08-09 (owner-directed): retry exhaustion no longer escalates
-    -- it ships to "builders" with review_result.passed=False still recorded,
-    rather than blocking the product in Manual Review.
+    Up to settings.MAX_WRITER_REVIEWER_ATTEMPTS (5, raised from a hardcoded 3
+    -- an earlier off-by-one here had capped it at 2; 2026-08-09
+    owner-directed: "try harder before giving up" on SEO/fact checks rather
+    than blocking export). Reaching the cap ships to "builders" with
+    review_result.passed=False still recorded, rather than blocking the
+    product in Manual Review.
     """
+    from app.core.config import settings
     from app.models.review_result import ReviewResult
+
+    assert settings.MAX_WRITER_REVIEWER_ATTEMPTS == 5, (
+        "this test's retry_count values assume the default cap of 5; update "
+        "them if the setting's default changes"
+    )
 
     state = _state(
         retry_count=retry_count,

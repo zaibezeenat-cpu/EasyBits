@@ -1,6 +1,7 @@
 ﻿from decimal import Decimal
 from uuid import uuid4
 
+from app.core.config import settings
 from app.graph.router import after_review_router
 from app.graph.state import PipelineState
 from app.models.raw_input import RawProductInput
@@ -35,17 +36,18 @@ def test_after_review_router_retry_logic():
         )
     )
     
-    # Up to 3 total Writer/Reviewer attempts: retry_count=1 and 2 both retry.
-    # (Was capped at 2 attempts — off-by-one bug, fixed.) 2026-08-09
-    # (owner-directed): retry_count=3 now ships to "builders" instead of
-    # escalating -- retry exhaustion is no longer a Manual Review reason.
-    state.retry_count = 1
-    assert after_review_router(state) == "writer"
+    # Up to settings.MAX_WRITER_REVIEWER_ATTEMPTS total Writer/Reviewer
+    # attempts (raised from a hardcoded 3 to 5, 2026-08-09, owner-directed --
+    # "try harder before giving up" rather than blocking export). Every
+    # attempt below the cap retries; reaching the cap ships to "builders"
+    # instead of escalating -- retry exhaustion is no longer a Manual Review
+    # reason. Read from the setting so this test tracks it if changed again.
+    cap = settings.MAX_WRITER_REVIEWER_ATTEMPTS
+    for attempt in range(1, cap):
+        state.retry_count = attempt
+        assert after_review_router(state) == "writer", f"attempt {attempt} of {cap} should still retry"
 
-    state.retry_count = 2
-    assert after_review_router(state) == "writer"
-
-    state.retry_count = 3
+    state.retry_count = cap
     assert after_review_router(state) == "builders"
 
 def test_after_review_router_success():

@@ -118,6 +118,33 @@ export default function ProductQAPage() {
         </Card>
       )}
 
+      {/* Shown regardless of Full/Quick mode -- a product can reach this page
+          having shipped anyway after exhausting every Writer/Reviewer retry
+          without fully passing (backend/app/graph/router.py). The Quick
+          Review "Flagged checks" list further down only renders in Quick
+          mode, so Full mode (the default) would otherwise never show this. */}
+      {product?.review_result && product.review_result.passed === false && (
+        <Card className="border-amber-500/40 bg-amber-500/10">
+          <CardContent className="py-4 space-y-2">
+            <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">
+              Shipped without passing every SEO/fact check
+            </p>
+            <p className="text-xs text-textSecondary">
+              This product exhausted every Writer/Reviewer retry without fully passing. It was NOT held for Manual
+              Review — check these before exporting:
+            </p>
+            <div className="space-y-1.5 pt-1">
+              {failedChecks.map((c) => (
+                <div key={c.check_name} className="text-xs p-2 border rounded-md bg-background/60">
+                  <p className="font-medium">{c.check_name}</p>
+                  <p className="text-textSecondary">{c.detail}</p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid gap-8 lg:grid-cols-2">
         {/* Left: Extracted Facts (+ source citations in Full mode) */}
         <div className="space-y-6">
