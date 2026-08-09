@@ -80,18 +80,27 @@ class ExtractionResult(BaseModel):
         """
         The value to use downstream, resolved across ALL sources.
 
-        A value is trusted ONLY when it is corroborated -- an official brand
-        source states it, OR two or more independent sources agree. A value that
-        rests on a SINGLE unverified retailer (status "single_source") is NOT
-        returned: the whole point of the system is multi-source cross-checking,
-        and one retailer stating "capacity 346" with nothing to compare it
-        against is exactly the error that must be caught, not published.
+        2026-08-09 (owner-directed relaxation): a value backed by exactly ONE
+        source -- official OR a single trusted retailer -- is now accepted and
+        published. The prior two-source rule assumed corroboration would
+        usually be available; in practice most brands have no registered
+        official domain (brand_domain_aliases is deliberately not
+        auto-populated, see source_discovery.py) and only 1-2 trusted retailers
+        are configured, so getting two independent sources to state the exact
+        same spec rarely happened -- nearly every required field landed in
+        Manual Review even when the one source that did state it was correct.
 
-        (Also fixes the earlier latent bug where two agreeing sources cancelled
-        out and the field looked missing -- agreement now confirms.)
+        Still refused, on purpose:
+          - a field NO source states at all (status "unknown")
+          - a field where sources genuinely DISAGREE (status "conflict")
+        Both remain real reasons to hold a product; an uncontested single
+        source is no longer one of them. `single_source_value()` below and the
+        citation's `confidence`/`source_type` are still stored and shown in the
+        QA panel, so a single-retailer fact stays visibly less certain than a
+        corroborated one -- it just no longer blocks the product outright.
         """
         r = self.resolve(field_name)
-        return r.value if r.is_confirmed else None
+        return r.value if r.status in ("confirmed", "corroborated", "single_source") else None
 
     def single_source_value(self, field_name: str) -> str | None:
         """The value when it rests on exactly one unverified source, else None.
@@ -167,17 +176,18 @@ class ExtractionResult(BaseModel):
 
     def uncorroborated_required_fields(self, schema: "CategorySpecSchema") -> dict[str, str]:
         """
-        Required fields that are NOT safe to publish, mapped to why:
-        "single_source" (one unverified source) or "conflict" (sources disagree).
-        Distinct from `missing_required_fields` (no source states them at all),
-        so the review queue can show the real reason.
+        Required fields that are NOT safe to publish, mapped to why.
+
+        2026-08-09: "single_source" no longer escalates (see confirmed_value's
+        note) -- only a genuine cross-source "conflict" does. Kept as a dict
+        (not a list) for call-site compatibility in nodes.py.
         """
         issues: dict[str, str] = {}
         for f in schema.fields:
             if not f.required:
                 continue
             status = self.resolve(f.key).status
-            if status in ("single_source", "conflict"):
+            if status == "conflict":
                 issues[f.key] = status
         return issues
 

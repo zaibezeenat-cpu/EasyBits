@@ -129,10 +129,13 @@ async def test_the_deduction_never_counts_as_a_verified_fact():
 
 
 @pytest.mark.asyncio
-async def test_a_deduced_measurement_is_stripped_and_still_blocks():
+async def test_a_deduced_measurement_is_stripped_but_no_longer_blocks():
     """
     The model ignoring the prompt is the case that matters -- code has to catch
-    it. A guessed wattage must be discarded AND must still stop the product.
+    it. A guessed wattage must still be discarded (enforcement is unchanged),
+    but as of 2026-08-09 a field left missing after the strip no longer stops
+    the product -- see extractor_node's note next to `if missing:`. It ships
+    with wattage rendered "Not Available" instead of escalating.
     """
     result = await _run(
         _schema(VACUUM_TYPE_INFERABLE, WATTAGE_STRICT),
@@ -142,18 +145,24 @@ async def test_a_deduced_measurement_is_stripped_and_still_blocks():
         ],
     )
 
-    assert result.get("manual_review_required") is True
-    assert "wattage" in result["failure"].detail
+    assert not result.get("manual_review_required")
     assert result["extraction"].inferred_value("wattage") is None, "a guessed number survived"
 
 
 @pytest.mark.asyncio
-async def test_an_absent_required_field_still_blocks_when_not_inferable():
-    """The old behaviour, unchanged: no source, no deduction, no ship."""
-    result = await _run(_schema(WATTAGE_STRICT), [])
+async def test_an_absent_required_field_no_longer_blocks_when_not_inferable():
+    """
+    2026-08-09 (owner-directed): a required field no source states, and that
+    cannot be deduced either, is skipped -- not escalated. It renders "Not
+    Available" downstream (specs_renderer already tolerates a None
+    confirmed_value). Only a genuine cross-source conflict still blocks.
+    """
+    schema = _schema(WATTAGE_STRICT)
+    result = await _run(schema, [])
 
-    assert result.get("manual_review_required") is True
-    assert "wattage" in result["failure"].detail
+    assert not result.get("manual_review_required")
+    assert result["extraction"].confirmed_value("wattage") is None
+    assert "wattage" in result["extraction"].missing_required_fields(schema)
 
 
 @pytest.mark.asyncio

@@ -55,17 +55,21 @@ def test_single_official_source_still_confirms():
     assert er.confirmed_value("capacity") == "9 Cu Ft"
 
 
-def test_single_source_value_is_not_confirmed():
+def test_single_source_value_is_now_confirmed():
     """
-    The owner's core rule: one unverified source is not enough. A retailer-only
-    value must NOT be published -- this is what catches a wrong "346" capacity.
+    2026-08-09 relaxation: a single unverified retailer IS now published (see
+    ExtractionResult.confirmed_value's docstring) -- two-source corroboration
+    was blocking most products since few brands have a registered official
+    domain and only 1-2 trusted retailers are usually configured.
+    `single_source_value` still reports the weaker confidence tier for the QA
+    panel even though the value is no longer withheld.
     """
     er = _result([_cite("capacity", "346", "https://japanelectronics.pk/x")])
-    assert er.confirmed_value("capacity") is None
+    assert er.confirmed_value("capacity") == "346"
     assert er.single_source_value("capacity") == "346"
 
 
-def test_single_source_required_field_is_flagged_for_review():
+def test_single_source_required_field_is_no_longer_flagged_for_review():
     from uuid import uuid4
 
     from app.models.taxonomy import CategorySpecSchema, SpecField
@@ -78,7 +82,7 @@ def test_single_source_required_field_is_flagged_for_review():
     )
     er = _result([_cite("capacity", "346", "https://japanelectronics.pk/x")])
     issues = er.uncorroborated_required_fields(schema)
-    assert issues.get("capacity") == "single_source"
+    assert "capacity" not in issues
 
 
 def test_two_sources_agreeing_ARE_confirmed_and_publishable():

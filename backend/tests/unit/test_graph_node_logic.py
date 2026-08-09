@@ -224,10 +224,16 @@ def test_intake_router_proceeds_when_schema_present():
     assert router.after_intake_router(_state(category_schema=_schema())) == "extractor"
 
 
-def test_extractor_router_escalates_on_missing_required_field():
+def test_extractor_router_skips_missing_required_field_instead_of_escalating():
+    """
+    2026-08-09 (owner-directed): a required field no source states is no
+    longer an escalation reason -- it's rendered "Not Available" downstream
+    (specs_renderer, name_builder, etc. all already tolerate a None
+    confirmed_value). Only a genuine cross-source conflict still escalates.
+    """
     state = _state(category_schema=_schema(),
                    extraction=_extraction(capacity_value="UNKNOWN", confidence="unreachable"))
-    assert router.after_extractor_router(state) == "escalation"
+    assert router.after_extractor_router(state) == "image_fallback"
 
 
 def test_extractor_router_proceeds_when_required_fields_present():

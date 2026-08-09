@@ -1,18 +1,35 @@
 
 from app.db.supabase_client import get_supabase
+from app.db.repositories._ttl_cache import TTLCache
 
 
 class SourcesRepository:
+    def __init__(self):
+        # See _ttl_cache.py. get_brand_aliases costs 2 round-trips (brand
+        # lookup + alias lookup) and runs once per product in
+        # deterministic_builders_node. Invalidated wholesale (not by key) on
+        # any brand-domain write below, since those writes are keyed by
+        # brand_id, not brand_name, and are rare admin actions -- not worth a
+        # second lookup just to invalidate precisely.
+        self._brand_alias_cache = TTLCache()
+
     async def get_brand_aliases(self, brand_name: str) -> list[str]:
+        hit, cached = self._brand_alias_cache.get(brand_name)
+        if hit:
+            return cached
+
         db = await get_supabase()
         # First find brand_id
         brand_resp = await db.table("brands").select("id").eq("name", brand_name).execute()
         if not brand_resp.data:
+            self._brand_alias_cache.set(brand_name, [])
             return []
 
         brand_id = brand_resp.data[0]["id"]
         alias_resp = await db.table("brand_domain_aliases").select("official_domain").eq("brand_id", brand_id).eq("is_active", True).execute()
-        return [row["official_domain"].lower() for row in alias_resp.data]
+        result = [row["official_domain"].lower() for row in alias_resp.data]
+        self._brand_alias_cache.set(brand_name, result)
+        return result
 
     async def list_brand_domains(self) -> dict[str, str]:
         """
@@ -42,11 +59,13 @@ class SourcesRepository:
             {"brand_id": brand_id, "official_domain": official_domain, "is_active": True},
             on_conflict="brand_id",
         ).execute()
+        self._brand_alias_cache.invalidate()
         return response.data[0]
 
     async def clear_brand_domain(self, brand_id: str) -> None:
         db = await get_supabase()
         await db.table("brand_domain_aliases").delete().eq("brand_id", brand_id).execute()
+        self._brand_alias_cache.invalidate()
 
     async def set_trusted_secondary_source_priority(self, source_id: str, priority: int) -> dict:
         db = await get_supabase()

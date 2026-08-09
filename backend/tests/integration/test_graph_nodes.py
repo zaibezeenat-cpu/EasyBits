@@ -75,7 +75,8 @@ async def test_extractor_node_no_urls():
         )
     )
     
-    with patch("app.graph.nodes.scrape_product", AsyncMock(return_value={"failure": FailureInfo(category="no_reliable_source_found", detail="No reliable source found")})):
+    with patch("app.graph.nodes.scrape_product", AsyncMock(return_value={"failure": FailureInfo(category="no_reliable_source_found", detail="No reliable source found")})), \
+         patch("app.graph.nodes.settings_repo.get_setting", AsyncMock(return_value=None)):
         result = await extractor_node(state)
         assert result["manual_review_required"] is True
         assert result["failure"].category == "no_reliable_source_found"

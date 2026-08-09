@@ -330,16 +330,23 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
                 missing = extraction.missing_required_fields(state.category_schema)
                 uncorroborated = extraction.uncorroborated_required_fields(state.category_schema)
 
-        single = [f for f, s in uncorroborated.items() if s == "single_source"]
+        # 2026-08-09 (owner-directed): a missing field (no source states it at
+        # all) no longer escalates -- pass 2 above already tried harder to find
+        # it; if it's still not found, it's skipped and rendered "Not Available"
+        # downstream, not held for review. uncorroborated_required_fields() also
+        # no longer reports "single_source" (a lone retailer now publishes, see
+        # ExtractionResult.confirmed_value) -- only a genuine cross-source
+        # "conflict" still blocks the product.
         conflicting = [f for f, s in uncorroborated.items() if s == "conflict"]
 
         # Which fields may be DEDUCED is decided by the category schema, not here.
         #
-        # This replaces an earlier CORE_FIELDS bypass that filtered `missing` and
-        # `single` against {"title", "brand", "regular_price", "category"}. Only
-        # "brand" is a real spec-schema key -- the others are CSV columns -- so the
-        # filter emptied the list almost entirely: with an official source present,
-        # a product missing its model_number, wattage and voltage sailed through.
+        # This replaces an earlier CORE_FIELDS bypass that filtered `missing`
+        # against {"title", "brand", "regular_price", "category"}. Only "brand"
+        # is a real spec-schema key -- the others are CSV columns -- so the
+        # filter emptied the list almost entirely: with an official source
+        # present, a product missing its model_number, wattage and voltage
+        # sailed through.
         #
         # The two legitimate cases it was reaching for are both handled properly now:
         #   * field genuinely does not apply  -> required: false in the schema
@@ -358,7 +365,6 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
             # real gap, so the missing/uncorroborated sets are recomputed.
             missing = extraction.missing_required_fields(state.category_schema)
             uncorroborated = extraction.uncorroborated_required_fields(state.category_schema)
-            single = [f for f, s in uncorroborated.items() if s == "single_source"]
             conflicting = [f for f, s in uncorroborated.items() if s == "conflict"]
 
         deduced = extraction.inferred_fields(state.category_schema)
@@ -368,25 +374,27 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
                 f"{deduced}. Each is cited as 'inferred' and never counts as confirmed."
             )
 
-        has_issues = bool(missing or single or conflicting)
+        # 2026-08-09 (owner-directed): a missing field (no source states it at
+        # all) no longer escalates -- pass 2 above already tried harder to find
+        # it; if it's still not found, it's skipped and rendered "Not Available"
+        # downstream, not held for review. uncorroborated_required_fields() also
+        # no longer reports "single_source" (a lone retailer now publishes, see
+        # ExtractionResult.confirmed_value) -- only a genuine cross-source
+        # "conflict" still blocks the product. `missing` is logged for context
+        # even though it no longer gates escalation.
+        if missing:
+            logger.info(
+                f"No source stated {missing} for {state.raw_input.sku}; "
+                f"proceeding, will render as 'Not Available'."
+            )
 
-        if has_issues:
-            parts = []
-            if missing:
-                parts.append(f"no source states: {', '.join(missing)}")
-            if single:
-                # THE CORE RULE the owner insisted on: one source is not enough.
-                # A required value backed by a single unverified retailer, with
-                # nothing to cross-check against, is held for review rather than
-                # published -- this is what would have caught the wrong "346".
-                parts.append(
-                    f"only one source states (needs a second to corroborate): {', '.join(single)}"
-                )
-            if conflicting:
-                parts.append(f"sources disagree on: {', '.join(conflicting)}")
+        if conflicting:
             return {
                 "extraction": extraction,
-                "failure": FailureInfo(category="spec_conflict", detail="; ".join(parts)),
+                "failure": FailureInfo(
+                    category="spec_conflict",
+                    detail=f"sources disagree on: {', '.join(conflicting)}",
+                ),
                 "manual_review_required": True,
             }
 

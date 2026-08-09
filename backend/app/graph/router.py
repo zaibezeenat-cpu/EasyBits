@@ -17,12 +17,16 @@ def after_extractor_router(state: PipelineState) -> str:
         return "escalation"
     if not state.extraction:
         return "escalation"
-    
-    # Check for conflicts or missing required fields
-    if state.extraction.conflicting_fields(state.category_schema) or \
-       state.extraction.missing_required_fields(state.category_schema):
+
+    # 2026-08-09 (owner-directed): a field no source states is skipped, not
+    # escalated -- specs_renderer/name_builder/etc. already tolerate a None
+    # confirmed_value (rendered as "Not Available" / dropped from the title).
+    # Only a genuine cross-source DISAGREEMENT still blocks the product --
+    # that's the one case where publishing could put a wrong fact on the
+    # live store, versus a merely-incomplete one.
+    if state.extraction.conflicting_fields(state.category_schema):
         return "escalation"
-        
+
     return "image_fallback"
 
 def after_writer_router(state: PipelineState) -> str:
