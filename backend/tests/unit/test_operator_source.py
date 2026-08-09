@@ -146,13 +146,26 @@ async def test_non_http_official_url_is_not_fetched_ssrf_guard(monkeypatch):
 # --- extractor_node mode logic ---------------------------------------------
 
 @pytest.mark.asyncio
-async def test_strict_with_nothing_provided_escalates_without_discovery(monkeypatch):
+async def test_strict_with_nothing_provided_proceeds_with_zero_grounding_but_never_discovers(monkeypatch):
+    """
+    2026-08-09 (owner-directed): strict provided-source mode with nothing
+    supplied no longer escalates -- it proceeds with an empty source list
+    (every field UNKNOWN, rendered "Not Available" downstream). Strict mode's
+    real guarantee -- it must NEVER fall back to discovery -- is unchanged and
+    still asserted here.
+    """
     monkeypatch.setattr(nodes.settings_repo, "get_setting", AsyncMock(return_value="strict"))
     scrape = AsyncMock()
     monkeypatch.setattr(nodes, "scrape_product", scrape)
-    result = await extractor_or_state(monkeypatch, _state())
-    assert result["manual_review_required"] is True
-    assert result["failure"].category == "no_reliable_source_found"
+    empty_extraction = ExtractionResult(
+        product_id=str(uuid4()), category_key="air_conditioner", citations=[], image_urls=[],
+    )
+    monkeypatch.setattr(nodes.llm_provider, "call", AsyncMock(return_value=empty_extraction))
+
+    result = await extractor_or_state(monkeypatch, _state(category_schema=_schema()))
+
+    assert not result.get("manual_review_required", False)
+    assert "extraction" in result
     scrape.assert_not_called()
 
 

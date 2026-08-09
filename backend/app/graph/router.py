@@ -61,20 +61,27 @@ def after_duplicate_sku_router(state: PipelineState) -> str:
 
 
 def after_review_router(state: PipelineState) -> str:
-    """Retry logic: exactly 3 total attempts (Phase 2 §3.3)"""
+    """Retry logic: up to 3 Writer/Reviewer attempts (Phase 2 §3.3)"""
     if state.manual_review_required or state.failure:
         return "escalation"
 
     if state.review_result and state.review_result.passed:
         return "builders"
-    
+
     # writer_node increments retry_count BEFORE reviewer runs, so by the time this
     # router checks, retry_count already reflects "attempts made so far":
     # attempt 1 -> retry_count=1 -> 1<3 -> writer (attempt 2)
     # attempt 2 -> retry_count=2 -> 2<3 -> writer (attempt 3)
-    # attempt 3 -> retry_count=3 -> 3<3 false -> escalation
-    # This gives exactly 3 total Writer/Reviewer attempts (was capped at 2 — off-by-one, fixed).
+    # attempt 3 -> retry_count=3 -> 3<3 false -> builders
+    # This gives up to 3 total Writer/Reviewer attempts (was capped at 2 — off-by-one, fixed).
     if state.retry_count < 3:
         return "writer"
 
-    return "escalation"
+    # 2026-08-09 (owner-directed): retry exhaustion no longer escalates to
+    # Manual Review -- the SEO/fact-check gate (17 checks in seo_validator.py
+    # plus the reviewer's semantic pass) was the single most common real-world
+    # escalation reason. The product ships with whatever the 3rd attempt
+    # produced; reviewer_node still records review_result.passed=False and the
+    # specific failed checks on the product row, so a low-quality write-up is
+    # visible in the QA panel/product record, it just no longer blocks export.
+    return "builders"

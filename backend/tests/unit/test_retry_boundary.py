@@ -35,8 +35,10 @@ def test_after_review_router_retry_logic():
         )
     )
     
-    # Exactly 3 total Writer/Reviewer attempts: retry_count=1 and 2 both retry,
-    # retry_count=3 escalates. (Was capped at 2 attempts — off-by-one bug, fixed.)
+    # Up to 3 total Writer/Reviewer attempts: retry_count=1 and 2 both retry.
+    # (Was capped at 2 attempts — off-by-one bug, fixed.) 2026-08-09
+    # (owner-directed): retry_count=3 now ships to "builders" instead of
+    # escalating -- retry exhaustion is no longer a Manual Review reason.
     state.retry_count = 1
     assert after_review_router(state) == "writer"
 
@@ -44,7 +46,7 @@ def test_after_review_router_retry_logic():
     assert after_review_router(state) == "writer"
 
     state.retry_count = 3
-    assert after_review_router(state) == "escalation"
+    assert after_review_router(state) == "builders"
 
 def test_after_review_router_success():
     state = PipelineState(

@@ -195,15 +195,6 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
 
     if mode == "strict":
         # Strict: no discovery at all -- trust only what the operator supplied.
-        if not operator_docs:
-            return {
-                "failure": FailureInfo(
-                    category="no_reliable_source_found",
-                    detail=("Strict provided-source mode is on, but this product has no "
-                            "official_url or source_details to use."),
-                ),
-                "manual_review_required": True,
-            }
         scraped = {"scraped_data": operator_docs}
     else:
         # Augment: operator source(s) PLUS discovery. PASS 1 is FREE tiers only
@@ -218,12 +209,25 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
                 raw.brand_name, raw.model_number, tiers_to_run=GOOGLE_TIER
             )
         discovered = scraped.get("scraped_data", [])
-        if operator_docs or discovered:
-            # Operator docs lead (top trust), then the discovered sources.
-            scraped = {"scraped_data": operator_docs + discovered}
-        else:
-            # Nothing provided and nothing discovered -- escalate with the real reason.
-            return {"failure": scraped["failure"], "manual_review_required": True}
+        # Operator docs lead (top trust), then the discovered sources.
+        scraped = {"scraped_data": operator_docs + discovered}
+
+    # 2026-08-09 (owner-directed): finding literally nothing (no operator link,
+    # no discovered source) no longer escalates -- it proceeds with an empty
+    # source list. The Extractor's no-hallucination contract already means an
+    # empty prompt yields every field UNKNOWN rather than an invented value
+    # (ExtractionResult.confirmed_value returns None with zero citations,
+    # exactly like a field a real source simply didn't mention), and those
+    # render "Not Available" downstream instead of blocking the product. This
+    # is a real accuracy trade -- a product with zero sources ships with no
+    # verified specs at all -- but matches "force to find, and if not found,
+    # skip; no issue" over holding the product for review.
+    if not scraped["scraped_data"]:
+        logger.warning(
+            f"No source found (operator-provided or discovered) for "
+            f"{state.raw_input.sku}; proceeding with zero grounding -- every "
+            f"spec field will render 'Not Available'."
+        )
 
     # --- Warranty cross-check (phase1.md §5.5) ---
     # The warranty is hand-typed into the input sheet and then repeated in four
@@ -745,20 +749,18 @@ async def reviewer_node(state: PipelineState) -> dict[str, Any]:
 
         result: dict[str, Any] = {"review_result": review_result}
 
-        # BUG FIX (Phase 3 integration test): after_review_router escalates on
-        # retry exhaustion (retry_count >= 3) purely from routing logic -- a
-        # router can't set state, so state.failure stayed None on that path
-        # and escalation_handler fell back to "other"/"Unknown error", losing
-        # the real reviewer/SEO failure reasons on what will likely be the
-        # single most common escalation path in real usage. Set it here, on
-        # the last attempt, so the Manual Review queue shows what actually
-        # failed instead of a blank reason.
+        # 2026-08-09 (owner-directed): retry exhaustion (retry_count >= 3) no
+        # longer escalates -- after_review_router now sends it to "builders"
+        # regardless of `passed`. review_result (with its per-check pass/fail
+        # detail) is still returned and persisted on the product row, so the
+        # reason a product didn't cleanly pass every SEO/fact check stays
+        # visible; it just no longer blocks the CSV from being produced.
         if not all_passed and state.retry_count >= 3:
-            result["failure"] = FailureInfo(
-                category="writer_reviewer_exhausted",
-                detail=(review_result.failure_summary or "Writer/Reviewer failed SEO or fact checks.").strip(),
+            logger.warning(
+                f"Writer/Reviewer exhausted 3 attempts for {state.raw_input.sku} "
+                f"without passing every check ({review_result.failure_summary}); "
+                f"shipping the last attempt rather than escalating."
             )
-            result["manual_review_required"] = True
 
         return result
     except Exception as e:

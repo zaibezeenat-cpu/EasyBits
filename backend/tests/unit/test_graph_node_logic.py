@@ -241,11 +241,13 @@ def test_extractor_router_proceeds_when_required_fields_present():
     assert router.after_extractor_router(state) == "image_fallback"
 
 
-@pytest.mark.parametrize("retry_count,expected", [(1, "writer"), (2, "writer"), (3, "escalation")])
-def test_review_router_allows_exactly_three_attempts(retry_count, expected):
+@pytest.mark.parametrize("retry_count,expected", [(1, "writer"), (2, "writer"), (3, "builders")])
+def test_review_router_allows_up_to_three_attempts_then_ships(retry_count, expected):
     """
-    The locked spec is 3 total Writer/Reviewer attempts. An off-by-one here
-    previously capped it at 2.
+    Up to 3 Writer/Reviewer attempts (an off-by-one here previously capped it
+    at 2). 2026-08-09 (owner-directed): retry exhaustion no longer escalates
+    -- it ships to "builders" with review_result.passed=False still recorded,
+    rather than blocking the product in Manual Review.
     """
     from app.models.review_result import ReviewResult
 
