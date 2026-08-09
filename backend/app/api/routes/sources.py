@@ -39,9 +39,13 @@ class BrandDomainUpdate(BaseModel):
 
 @router.get("/trusted-secondary")
 async def list_trusted_secondary_sources():
-    """Settings -> Trusted Secondary Sources (phase2.md §5.2). Seeded with Japan
-    Electronics/Surmawala by default, but this list is fully admin-editable --
-    add/remove/deactivate without a code change or redeploy."""
+    """Settings -> Trusted Secondary Sources (phase2.md §5.2). Seeded with
+    Surmawala, Japan Electronics and Pak Electronics by default (priority
+    order, scripts/seed_taxonomy.py::seed_trusted_secondary_sources) -- but
+    this list, and its priority order, is fully admin-editable -- add,
+    remove, deactivate, or reorder without a code change or redeploy.
+    Discovery consults active rows strictly by `priority` (ascending), read
+    live on every call."""
     return await sources_repo.list_all_trusted_secondary_sources()
 
 

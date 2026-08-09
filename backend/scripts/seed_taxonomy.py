@@ -467,9 +467,22 @@ async def seed_trusted_secondary_sources():
     every product and everything escalated before Agent 1 ever ran.)
     """
     db = await get_supabase()
+    # 2026-08-09 (owner-directed): priority order corrected to Surmawala ->
+    # Japan Electronics -> Pak Electronics -> (Google broad search, which is
+    # its own separate tier below this one -- see GOOGLE_TIER in
+    # source_discovery.py -- not something to add here). Explicitly does NOT
+    # include general marketplaces like Naheed/Metro/Ary: those carry every
+    # category, not specialist appliance listings, and were flagged as
+    # unreliable for this catalogue -- never add them here as defaults.
+    #
+    # pakelectronics.pk is UNVERIFIED -- the real registered domain was not
+    # confirmed at the time this was added. Check/correct it in Settings ->
+    # Trusted Secondary Sources; that edit takes effect immediately with no
+    # redeploy, same as every other row here (see this function's docstring).
     defaults = [
-        {"domain": "japanelectronics.pk", "label": "Japan Electronics", "priority": 1},
-        {"domain": "surmawala.pk", "label": "Surmawala", "priority": 2},
+        {"domain": "surmawala.pk", "label": "Surmawala", "priority": 1},
+        {"domain": "japanelectronics.pk", "label": "Japan Electronics", "priority": 2},
+        {"domain": "pakelectronics.pk", "label": "Pak Electronics", "priority": 3},
     ]
     for source in defaults:
         await db.table("trusted_secondary_sources").upsert(

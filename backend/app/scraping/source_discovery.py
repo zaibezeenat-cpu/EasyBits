@@ -390,7 +390,9 @@ async def _tier_official_domain(brand_name: str, model_number: str) -> list[dict
 
 
 async def _tier_trusted_secondary(brand_name: str, model_number: str) -> list[dict[str, str]]:
-    """Tier 3 — retailer sites the owner has approved (Japan Electronics, Surmawala, ...)."""
+    """Tier 3 — retailer sites the owner has approved (Surmawala, Japan Electronics,
+    Pak Electronics, ...), consulted in the ADMIN-CONFIGURED `priority` order
+    (Settings -> Trusted Secondary Sources), never a hardcoded list here."""
     configured = await sources_repo.get_active_trusted_secondary_sources()
     cached = await get_cached_search_templates()
     sources: list[dict[str, str]] = []
