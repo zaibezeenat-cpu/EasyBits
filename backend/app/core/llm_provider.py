@@ -32,11 +32,22 @@ def _looks_like_rate_limit(error: Exception) -> bool:
     text = str(error).lower()
     return any(marker in text for marker in _RATE_LIMIT_MARKERS)
 
-# phase1.md §4: Extractor -> Gemini (cheap/fast structured extraction).
-# Writer/Reviewer -> Groq (free-tier, fast, avoids paying premium-model prices
-# for the harder/more creative half of the job). One fallback per role, per
-# phase1.md §4's explicit "single-provider dependency is a single point of
-# failure" requirement.
+# 2026-08-09 (owner-directed): ALL FOUR roles now primary on Gemini, Groq as
+# the shared fallback -- reversed from the original Writer/Reviewer ->
+# Groq-primary design. Groq's free tier caps at 100k tokens/day (see the
+# RIPER concurrency research earlier this session); Gemini's free daily quota
+# is far larger, so putting Writer+Reviewer's real per-product volume there
+# is what actually lets a full batch run without hitting a provider ceiling.
+# llama-3.3-70b-versatile's schema reliability (below) is still real -- it's
+# exactly why it stays the FALLBACK, not why it should be primary: if Gemini
+# ever has an off day, Groq is what catches Writer/Reviewer's strict output
+# contract (5 FAQs, 3 LSI keywords) rather than failing outright.
+#
+# One fallback per role is kept, per phase1.md §4's explicit "single-provider
+# dependency is a single point of failure" requirement -- Gemini being
+# primary everywhere does concentrate risk onto one provider being UP; Groq
+# being the fallback for all four roles is the mitigation for that, same
+# shape the design already had, just pointed the other way.
 #
 # BUG FIX (V3.0 review): every node called llm_provider.call(role=..., ...)
 # without ever passing model_id, so ALL THREE roles silently defaulted to the
@@ -66,10 +77,12 @@ def _looks_like_rate_limit(error: Exception) -> bool:
 ROLE_MODEL_CONFIG: dict[str, dict[str, str]] = {
     "extractor": {"primary_provider": "google", "primary_model": "gemini-flash-lite-latest",
                   "fallback_provider": "groq", "fallback_model": "llama-3.3-70b-versatile"},
-    "writer": {"primary_provider": "groq", "primary_model": "llama-3.3-70b-versatile",
-               "fallback_provider": "google", "fallback_model": "gemini-flash-lite-latest"},
-    "reviewer": {"primary_provider": "groq", "primary_model": "llama-3.3-70b-versatile",
-                 "fallback_provider": "google", "fallback_model": "gemini-flash-lite-latest"},
+    # 2026-08-09 (owner-directed): Gemini primary, Groq fallback -- reversed
+    # from Groq-primary. See the comment above ROLE_MODEL_CONFIG for why.
+    "writer": {"primary_provider": "google", "primary_model": "gemini-flash-lite-latest",
+               "fallback_provider": "groq", "fallback_model": "llama-3.3-70b-versatile"},
+    "reviewer": {"primary_provider": "google", "primary_model": "gemini-flash-lite-latest",
+                 "fallback_provider": "groq", "fallback_model": "llama-3.3-70b-versatile"},
     # Category classifier: a tiny "pick one from this exact list or UNKNOWN" call,
     # used ONLY when deterministic name-matching finds nothing (e.g. a hair
     # straightener -> "Beauty", whose name never appears in the product title).

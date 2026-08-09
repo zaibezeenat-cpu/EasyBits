@@ -146,3 +146,22 @@ async def test_provider_semaphore_caps_concurrent_in_flight_calls(monkeypatch):
         provider.call(role="categorizer", system_prompt="s", human_prompt="h", response_model=_Out),
     )
     assert max_concurrent == 1, "the provider semaphore must serialise same-provider calls"
+
+
+# --- Provider priority (2026-08-09, owner-directed) --------------------------
+
+def test_all_roles_are_gemini_primary_groq_fallback():
+    """
+    Reversed from the original Writer/Reviewer -> Groq-primary design:
+    Groq's free tier caps at 100k tokens/day: Gemini's is far larger, and
+    Writer+Reviewer are the highest-volume roles (up to
+    MAX_WRITER_REVIEWER_ATTEMPTS retries each), so they're what actually
+    needs the bigger quota. Groq stays the fallback for every role, not
+    dropped -- it's still what catches Writer/Reviewer's strict output
+    schema (5 FAQs, 3 LSI keywords) if Gemini has an off day.
+    """
+    from app.core.llm_provider import ROLE_MODEL_CONFIG
+
+    for role, cfg in ROLE_MODEL_CONFIG.items():
+        assert cfg["primary_provider"] == "google", f"{role} must be Gemini-primary"
+        assert cfg["fallback_provider"] == "groq", f"{role} must keep Groq as its fallback"
