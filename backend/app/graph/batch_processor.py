@@ -15,6 +15,37 @@ from app.sse import sse_manager
 logger = logging.getLogger(__name__)
 
 
+def _issue_reason(update: dict, final_state: PipelineState) -> str | None:
+    """
+    The real, specific reason THIS product needs attention, or None if it
+    doesn't -- owner-directed (2026-08-09): the end-of-batch report must
+    name the actual product and the actual issue, never a bare "check the
+    review queue" or a generic "Unknown error" fallback.
+
+    Covers all three ways a product can need a second look:
+      - manual_review: the escalation reason already on state.failure.
+      - ready_for_qa but review_result.passed is False: it shipped anyway
+        (see after_review_router) -- name the specific failed check(s).
+      - failed: whatever exception or guard rejected it.
+    A clean ready_for_qa with review_result.passed True (or no review_result
+    at all, e.g. a manual-review escalation that never reached the writer)
+    returns None -- nothing to report.
+    """
+    status = update.get("status")
+    if status == "manual_review" or status == "failed":
+        reason = update.get("failure_reason") or "other"
+        detail = (update.get("failure_detail") or {}).get("detail") or "no further detail recorded"
+        return f"{reason}: {detail}"
+
+    if status == "ready_for_qa" and final_state.review_result and final_state.review_result.passed is False:
+        failed_checks = [c.detail for c in final_state.review_result.checks if not c.passed]
+        if not failed_checks:
+            failed_checks = [final_state.review_result.failure_summary or "did not pass review"]
+        return "shipped without passing every SEO/fact check: " + "; ".join(failed_checks)
+
+    return None
+
+
 def _final_state_to_product_update(final_state: PipelineState) -> dict:
     """
     Maps the graph's final PipelineState onto `products` columns.
@@ -80,7 +111,7 @@ class BatchProcessor:
         products = await products_repo.get_by_batch(batch_id)
 
         try:
-            tally, paused = await BatchProcessor._run_products(batch_id, products)
+            tally, paused, issues = await BatchProcessor._run_products(batch_id, products)
         finally:
             # The scraper's shared Chromium is a real OS process that outlives
             # this coroutine if nothing closes it. In `finally` so a crash or a
@@ -116,18 +147,42 @@ class BatchProcessor:
             f"{tally['manual_review']} need manual review, "
             f"{tally['failed']} failed"
         )
-        logger.info(f"Batch {batch_id} complete: {summary}")
+
+        # 2026-08-09 (owner-directed): "if failed or issue with product, pass
+        # it, but at the end strictly tell me what the issue was -- not
+        # 'check the review queue', not 'unknown error'." Every product with
+        # a real issue -- manual_review, shipped-but-failed-SEO, or a hard
+        # failure -- gets its SKU and the ACTUAL reason spelled out here, not
+        # a redirect. Full list always goes to the server log; the SSE
+        # payload (and the toast built from it) caps at 5 named entries plus
+        # a count, since a 50-line toast is unreadable, but the full list is
+        # always in `issues` for the batch detail page to render in full.
+        issue_lines = [
+            f"{i.get('sku') or i.get('name') or 'unknown SKU'}: {i['reason']}"
+            for i in issues
+        ]
+        if issue_lines:
+            logger.info(f"Batch {batch_id} issues ({len(issue_lines)}):\n" + "\n".join(issue_lines))
+            shown = issue_lines[:5]
+            more = len(issue_lines) - len(shown)
+            summary += "\nIssues:\n- " + "\n- ".join(shown)
+            if more > 0:
+                summary += f"\n- +{more} more (see the batch page for the full list)"
+
+        logger.info(f"Batch {batch_id} complete: {tally['succeeded']} ready for QA, "
+                    f"{tally['manual_review']} manual review, {tally['failed']} failed")
         sse_manager.notify(str(batch_id), {
             "event": "batch_completed",
             "total": len(products),
             "succeeded": tally["succeeded"],
             "manual_review": tally["manual_review"],
             "failed": tally["failed"],
+            "issues": issues,
             "summary": summary,
         })
 
     @staticmethod
-    async def _run_products(batch_id: UUID, products: list) -> tuple[dict[str, int], bool]:
+    async def _run_products(batch_id: UUID, products: list) -> tuple[dict[str, int], bool, list[dict]]:
         """
         Runs every product's pipeline, bounded by settings.BATCH_CONCURRENCY.
 
@@ -146,6 +201,10 @@ class BatchProcessor:
         interleave mid-increment.
         """
         tally = {"succeeded": 0, "failed": 0, "manual_review": 0}
+        # Every product with a real, nameable issue -- {sku, name, status,
+        # reason} -- built by _issue_reason() so the end-of-batch report can
+        # name each one specifically instead of pointing at the queue.
+        issues: list[dict] = []
         semaphore = asyncio.Semaphore(max(1, settings.BATCH_CONCURRENCY))
         # Concurrency-safe "pause once" latch: several workers can discover
         # the budget is exceeded at roughly the same time, but the batch
@@ -215,6 +274,15 @@ class BatchProcessor:
                     else:
                         tally["failed"] += 1
 
+                    reason = _issue_reason(update, final_state)
+                    if reason:
+                        issues.append({
+                            "sku": product.raw_input.get("sku") if isinstance(product.raw_input, dict) else None,
+                            "name": update.get("name"),
+                            "status": update["status"],
+                            "reason": reason,
+                        })
+
                     sse_manager.notify(str(batch_id), {
                         "event": "product_completed",
                         "product_id": str(product.id),
@@ -240,6 +308,12 @@ class BatchProcessor:
                             f"Could not persist failed status for product {product.id}: {persist_err}"
                         )
                     tally["failed"] += 1
+                    issues.append({
+                        "sku": product.raw_input.get("sku") if isinstance(product.raw_input, dict) else None,
+                        "name": None,
+                        "status": "failed",
+                        "reason": f"pipeline_exception: {e!s}",
+                    })
                     sse_manager.notify(str(batch_id), {
                         "event": "product_failed",
                         "product_id": str(product.id),
@@ -256,5 +330,12 @@ class BatchProcessor:
         for product, result in zip(products, results, strict=False):
             if isinstance(result, Exception):
                 logger.error(f"Unhandled error processing product {product.id}: {result}")
+                tally["failed"] += 1
+                issues.append({
+                    "sku": product.raw_input.get("sku") if isinstance(product.raw_input, dict) else None,
+                    "name": None,
+                    "status": "failed",
+                    "reason": f"pipeline_exception (outer): {result!s}",
+                })
 
-        return tally, pause_state["paused"]
+        return tally, pause_state["paused"], issues
