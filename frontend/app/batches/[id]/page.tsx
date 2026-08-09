@@ -43,7 +43,16 @@ export default function BatchDetailPage() {
       }
       if (data.event === "batch_completed" || data.event === "batch_paused") {
         queryClient.invalidateQueries({ queryKey: ["batch", id] });
-        toast.info(data.event === "batch_paused" ? "Batch paused (budget limit reached)" : "Batch completed");
+        queryClient.invalidateQueries({ queryKey: ["batches"] });
+        // batch_completed carries a plain-English tally (backend/app/graph/
+        // batch_processor.py) -- e.g. "7 ready for QA, 2 need manual review,
+        // 1 failed" -- so the operator sees the real outcome without opening
+        // the batch. Falls back to a bare label if the payload is ever absent.
+        toast.info(
+          data.event === "batch_paused"
+            ? "Batch paused (budget limit reached)"
+            : (data.summary ? `Batch completed: ${data.summary}` : "Batch completed"),
+        );
       }
     };
 

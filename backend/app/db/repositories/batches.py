@@ -12,6 +12,33 @@ class BatchesRepository(BaseRepository[Batch]):
     async def update_status(self, batch_id: UUID, status: str):
         await self.update(batch_id, {"status": status})
 
+    async def finish(
+        self,
+        batch_id: UUID,
+        *,
+        status: str,
+        total_products: int,
+        succeeded_count: int,
+        failed_count: int,
+        manual_review_count: int,
+    ) -> None:
+        """
+        Records the final tally for a completed run.
+
+        The Batch model has always had total_products/succeeded_count/
+        failed_count/manual_review_count, and the Dashboard's Recent Batches
+        table (frontend/app/page.tsx) has always rendered them -- but nothing
+        ever wrote them, so every batch row showed 0/0/0 regardless of what
+        actually happened. This is the write side of that read path.
+        """
+        await self.update(batch_id, {
+            "status": status,
+            "total_products": total_products,
+            "succeeded_count": succeeded_count,
+            "failed_count": failed_count,
+            "manual_review_count": manual_review_count,
+        })
+
     async def create_batch(self, label: str) -> UUID:
         batch = await self.create({"label": label, "status": BatchStatus.PENDING})
         return batch.id

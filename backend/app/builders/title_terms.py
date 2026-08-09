@@ -60,6 +60,15 @@ class TitleTerm(BaseModel):
     corroborated: bool
     verified: bool
     reason: str = ""
+    # 2026-08-09 (owner-directed): a term the BRAND'S OWN official page uses
+    # ("Anex ... Deluxe ...") is trusted on its own -- it does not need a
+    # second unrelated seller repeating it, and it does not need to match a
+    # confirmed SPEC fact, because a marketing/series word ("Deluxe") was
+    # never going to be a spec fact in the first place. This mirrors
+    # ExtractionResult.confirmed_value's rule: an official source is already
+    # the most authoritative tier (fact_corroboration._TIER_RANK), so it
+    # doesn't need corroborating against itself.
+    from_official: bool = False
 
 
 def _normalise(text: str) -> str:
@@ -76,63 +85,107 @@ def _tokens_to_drop(brand: str, model: str, capacity: str, product_type: str) ->
     return drop
 
 
+def _phrases_in_title(raw_title: str, drop: set[str], model_key: str) -> set[str] | None:
+    """
+    All 1-to-4-word sub-phrases survivng stopword/identity stripping in one
+    title, or None when the title isn't verifiably about this model.
+    """
+    if not raw_title:
+        return None
+    if model_key and model_key not in re.sub(r"[^a-z0-9]", "", raw_title.lower()):
+        return None
+
+    words = _normalise(raw_title).split()
+    runs: list[list[str]] = []
+    run: list[str] = []
+    for word in words + [""]:
+        key = word.lower().strip("-&")
+        is_noise = (not key) or key in drop or key.isdigit() or len(key) < 2
+        if is_noise:
+            if run:
+                runs.append(run)
+                run = []
+        else:
+            run.append(word)
+
+    # Emit every 1-to-4-word sub-phrase, not just whole runs. Sellers order and
+    # pad their titles differently ("EZ Glass Door Bottom Load" vs "Glass Door
+    # Bottom Load"), so whole-run matching almost never agrees and nothing
+    # would ever reach the corroboration threshold. Real product phrases run
+    # up to 4 words ("Glass Door Bottom Load"); a 3-word cap truncated them.
+    phrases: set[str] = set()
+    for candidate_run in runs:
+        for size in (1, 2, 3, 4):
+            for start in range(len(candidate_run) - size + 1):
+                phrases.add(" ".join(candidate_run[start:start + size]))
+    return phrases
+
+
 def harvest_title_terms(
     titles: Iterable[str],
     brand: str,
     model: str,
     capacity: str = "",
     product_type: str = "",
-    min_frequency: int = 2,
+    min_frequency: int = 1,
+    official_titles: Iterable[str] = (),
 ) -> list[TitleTerm]:
     """
     Extracts candidate series/feature phrases from competitor titles, ranked by
     how many distinct titles use them.
 
+    2026-08-09 (owner-directed): min_frequency default dropped from 2 to 1 --
+    a single seller's title is now enough to corroborate a term, matching the
+    same relaxation already applied to spec corroboration
+    (ExtractionResult.confirmed_value). Cross-seller agreement is no longer
+    required. The fact-matching gate in verify_terms() below is UNCHANGED and
+    is now the only thing standing between a retailer's marketing phrase and
+    the title: a word still has to appear in this product's own confirmed
+    specs to be used, so an unrelated capability claim ("Inverter" on a
+    non-inverter unit) is still rejected -- only the "needs a second seller
+    to agree" bar is gone.
+
     Only titles that actually name the model are considered -- a title for a
     different product tells us nothing about this one. Consecutive surviving
     words are joined into phrases so "Luxury Ultra" stays together rather than
     becoming two unrelated tokens.
+
+    `official_titles` -- the brand's OWN page title(s), when a source scraped
+    for this product was source_type == "official" -- are a separate, trusted
+    channel (2026-08-09, owner-directed). A phrase found there is marked
+    `from_official=True` and treated as corroborated regardless of frequency:
+    it does not need a second, unrelated seller to also use it, because the
+    brand's own product page is already the most authoritative source in this
+    system's trust hierarchy (see fact_corroboration._TIER_RANK). This is what
+    lets a genuine brand-marketing word ("Deluxe") reach the title even when
+    only one seller (the brand itself) ever wrote it down.
     """
     drop = _tokens_to_drop(brand, model, capacity, product_type)
     model_key = re.sub(r"[^a-z0-9]", "", (model or "").lower())
 
     phrase_counts: Counter[str] = Counter()
+    official_phrases: set[str] = set()
+    for raw_title in official_titles:
+        phrases = _phrases_in_title(raw_title, drop, model_key)
+        if phrases:
+            official_phrases |= phrases
+
     for raw_title in titles:
-        if not raw_title:
+        phrases_in_title = _phrases_in_title(raw_title, drop, model_key)
+        if phrases_in_title is None:
             continue
-        # Only trust titles that are actually about this model.
-        if model_key and model_key not in re.sub(r"[^a-z0-9]", "", raw_title.lower()):
-            continue
-
-        words = _normalise(raw_title).split()
-        runs: list[list[str]] = []
-        run: list[str] = []
-        for word in words + [""]:
-            key = word.lower().strip("-&")
-            is_noise = (not key) or key in drop or key.isdigit() or len(key) < 2
-            if is_noise:
-                if run:
-                    runs.append(run)
-                    run = []
-            else:
-                run.append(word)
-
-        # Emit every 1-to-3-word sub-phrase, not just whole runs. Sellers order
-        # and pad their titles differently ("EZ Glass Door Bottom Load" vs
-        # "Glass Door Bottom Load"), so whole-run matching almost never agrees
-        # and nothing would ever reach the corroboration threshold.
-        # Up to 4 words: real product phrases run that long ("Glass Door Bottom
-        # Load"), and a 3-word cap truncated them mid-phrase.
-        phrases_in_title: set[str] = set()
-        for candidate_run in runs:
-            for size in (1, 2, 3, 4):
-                for start in range(len(candidate_run) - size + 1):
-                    phrases_in_title.add(" ".join(candidate_run[start:start + size]))
-
         # Count each phrase once per title, so one verbose seller cannot
         # manufacture a majority on its own.
         for phrase in phrases_in_title:
             phrase_counts[phrase] += 1
+
+    # An official-only phrase (never repeated in any competitor title at all)
+    # still needs to be counted at least once so it appears in the result set
+    # below -- harvesting from official_titles alone must not depend on the
+    # same phrase also showing up in `titles`.
+    for phrase in official_phrases:
+        if phrase not in phrase_counts:
+            phrase_counts[phrase] = 1
 
     # Prefer the longest phrase: if "Glass Door" and "Glass" are equally common,
     # the fuller phrase is the real term and the fragment is noise.
@@ -155,18 +208,25 @@ def harvest_title_terms(
         and long_count >= short_count
     }
 
-    return [
-        TitleTerm(
+    terms = []
+    for phrase, count in phrase_counts.most_common():
+        if phrase in redundant:
+            continue
+        is_official = phrase in official_phrases
+        corroborated = is_official or count >= min_frequency
+        terms.append(TitleTerm(
             term=phrase,
             frequency=count,
-            corroborated=count >= min_frequency,
+            corroborated=corroborated,
             verified=False,
-            reason="" if count >= min_frequency else
-                   f"appears in only {count} title(s); needs {min_frequency}",
-        )
-        for phrase, count in phrase_counts.most_common()
-        if phrase not in redundant
-    ]
+            from_official=is_official,
+            reason=(
+                "sourced from the brand's own official page" if is_official else
+                "" if count >= min_frequency else
+                f"appears in only {count} title(s); needs {min_frequency}"
+            ),
+        ))
+    return terms
 
 
 def verify_terms(
@@ -182,10 +242,19 @@ def verify_terms(
     no exceptions by product type -- an air conditioner, a juicer and a water
     dispenser are all judged the same way.
 
-    The single allowance is `series`, the manufacturer's product line, which is
-    matched against the extracted series value rather than the spec text: a
-    series name ("Luxury Ultra", "Titan") identifies the model rather than
-    asserting a capability, and it does not appear in the specifications.
+    Two allowances to that one rule:
+      - `series`, the manufacturer's product line, matched against the
+        extracted series value rather than the spec text: a series name
+        ("Luxury Ultra", "Titan") identifies the model rather than asserting
+        a capability, and it does not appear in the specifications.
+      - `from_official` terms (2026-08-09, owner-directed): a marketing/series
+        word straight from the brand's own page ("Anex Deluxe...") was never
+        going to appear in a SPEC fact either -- "Deluxe" is not a capacity or
+        a wattage. Requiring it to match confirmed_facts would reject it for a
+        reason that has nothing to do with whether the claim is true. The
+        official source is already the most authoritative tier this system
+        has, so its own wording is trusted outright rather than checked
+        against a fact list it was never going to be found in.
 
     "UNKNOWN" facts count as absent, so a capability extraction could not
     confirm can never be justified by sellers repeating it.
@@ -204,6 +273,13 @@ def verify_terms(
             continue
 
         key = term.term.lower()
+
+        if term.from_official:
+            verified.append(term.model_copy(update={
+                "verified": True,
+                "reason": "sourced from the brand's own official page",
+            }))
+            continue
 
         if series_key and key in series_key:
             verified.append(term.model_copy(update={

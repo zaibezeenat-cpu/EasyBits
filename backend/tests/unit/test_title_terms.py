@@ -47,11 +47,17 @@ def test_series_name_is_harvested_and_verified():
     assert terms["luxury ultra"].verified
 
 
-def test_single_seller_marketing_is_not_corroborated():
-    """One seller's adjective is not evidence about the hardware."""
+def test_single_seller_marketing_is_rejected_by_the_facts_gate():
+    """
+    2026-08-09 (owner-directed): min_frequency dropped to 1 -- one seller's
+    title IS now enough to corroborate a term (`corroborated` no longer
+    implies safety on its own). What still stops an unrelated retailer
+    adjective from reaching the title is the UNCHANGED fact-matching gate in
+    verify_terms(): "Super Deluxe"/"Mega Offer" are not confirmed specs for
+    this product, so they fail verification regardless of corroboration.
+    """
     for term in _ac_terms():
         if "super deluxe" in term.term.lower() or "mega offer" in term.term.lower():
-            assert not term.corroborated
             assert not term.verified
 
 
@@ -185,3 +191,50 @@ def test_selection_is_capped_so_the_title_stays_a_headline():
 
 def test_no_titles_yields_no_features_rather_than_guesses():
     assert select_title_features(_ac_terms(titles=[])) == []
+
+
+# --- Official-source terms (2026-08-09) --------------------------------------
+
+def test_a_brand_marketing_word_from_the_official_page_reaches_the_title():
+    """
+    The Anex/Deluxe case: the brand's own official page titles the product
+    "Anex Deluxe Chopper AG-3001", but "Deluxe" is a marketing word, not a
+    spec fact -- no source states a spec called "Deluxe", and only the brand
+    itself (one source) ever writes it. Before 2026-08-09 this term could
+    never pass BOTH gates (2-seller corroboration, and matching a confirmed
+    spec fact) -- it would be silently dropped from every title. An official
+    source is now trusted outright.
+    """
+    facts = {"capacity": "600W", "material": "Plastic"}  # "Deluxe" nowhere in here.
+    harvested = harvest_title_terms(
+        titles=[],
+        official_titles=["Anex Deluxe Chopper AG-3001"],
+        brand="Anex", model="AG-3001", product_type="Chopper",
+    )
+    terms = {t.term.lower(): t for t in verify_terms(harvested, facts)}
+    assert "deluxe" in terms
+    assert terms["deluxe"].from_official
+    assert terms["deluxe"].corroborated
+    assert terms["deluxe"].verified
+
+    selected = select_title_features(list(terms.values()))
+    assert "Deluxe" in selected
+
+
+def test_a_retailer_only_word_still_needs_a_confirmed_fact():
+    """
+    The other half of the same fix: min_frequency dropped to 1, so a SINGLE
+    retailer's word is now corroborated -- but retailer wording (not
+    official) still has to match a confirmed spec fact to be verified. This
+    is what stops a retailer's unverified capability claim from reaching the
+    title on nothing but its own say-so.
+    """
+    facts = {"capacity": "600W", "material": "Plastic"}
+    harvested = harvest_title_terms(
+        titles=["Anex Turbo Chopper AG-3001"],  # only ONE seller, not official
+        brand="Anex", model="AG-3001", product_type="Chopper",
+    )
+    terms = {t.term.lower(): t for t in verify_terms(harvested, facts)}
+    assert "turbo" in terms
+    assert terms["turbo"].corroborated, "single mention is now enough to corroborate"
+    assert not terms["turbo"].verified, "but it still isn't a confirmed spec fact"

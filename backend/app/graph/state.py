@@ -19,9 +19,16 @@ class PipelineState(BaseModel):
     category_schema: CategorySpecSchema | None = None
     variant_shaped: bool = False
     # How other sellers title this model, harvested during scraping. Feeds the
-    # series/feature words in the product title, but only terms corroborated
-    # across multiple sources are ever used.
+    # series/feature words in the product title; a term needs at least one
+    # source using it AND to match a confirmed spec fact for this product
+    # (title_terms.py::verify_terms) to actually reach the title.
     competitor_titles: list[str] = []
+    # The subset of the SAME titles that came from an official brand source
+    # specifically (source_type == "official"), kept separately so
+    # harvest_title_terms can trust a brand's own wording (e.g. "Deluxe")
+    # without requiring a second seller to repeat it or the word to appear in
+    # extracted specs -- see title_terms.py's `official_titles` param.
+    official_titles: list[str] = []
     extraction: ExtractionResult | None = None
     selected_template_type: Literal["A", "B"] = "A"
     writer_output: WriterOutput | None = None

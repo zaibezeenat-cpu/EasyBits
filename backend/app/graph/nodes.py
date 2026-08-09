@@ -411,6 +411,17 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
                 for doc in scraped["scraped_data"]
                 for title in doc.get("candidate_titles", [])
             ],
+            # 2026-08-09: the SAME titles, but only from source_type ==
+            # "official" docs, kept separate so harvest_title_terms can trust
+            # the brand's own wording without needing a second seller to
+            # repeat it -- see state.py's official_titles and
+            # title_terms.py's official_titles param.
+            "official_titles": [
+                title
+                for doc in scraped["scraped_data"]
+                if doc.get("source_type") == "official"
+                for title in doc.get("candidate_titles", [])
+            ],
         }
     except Exception as e:
         logger.error(f"Extraction failed: {e!s}", exc_info=True)
@@ -495,9 +506,13 @@ async def writer_node(state: PipelineState) -> dict[str, Any]:
     # --- V8.0 Production Lock: Product Name / Focus Keyword built FIRST, deterministically ---
     # Boss Rule title: [Brand] [Capacity] [SKU] [Series] [Features] [Full Type].
     # Series and feature wording is harvested from how OTHER sellers title this
-    # exact model, but only terms that (a) appear in at least two independent
-    # titles and (b) do not claim a capability the extraction failed to confirm.
-    # Everything else is dropped -- a shorter title beats an unverified claim.
+    # exact model. 2026-08-09: a term from the brand's OWN official page
+    # (state.official_titles) is trusted on its own -- e.g. "Anex ... Deluxe
+    # ..." -- while a term seen only on a retailer's page (state.
+    # competitor_titles) still needs to match a confirmed spec fact for this
+    # product (a capability extraction never confirmed still never enters the
+    # title). Everything else is dropped -- a shorter title beats an
+    # unverified claim.
     # The title uses the product's REAL type, not the taxonomy category. A
     # juicer filed under "Blender" is titled "... Hard Fruit Juicer" while its
     # Categories column still reads "Kitchen Appliances > Blender" -- confirmed
@@ -512,6 +527,7 @@ async def writer_node(state: PipelineState) -> dict[str, Any]:
 
     harvested = harvest_title_terms(
         titles=state.competitor_titles,
+        official_titles=state.official_titles,
         brand=state.raw_input.brand_name,
         model=state.raw_input.model_number,
         capacity=state.extraction.confirmed_value("capacity") or "",

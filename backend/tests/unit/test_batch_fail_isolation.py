@@ -23,6 +23,9 @@ async def test_pipeline_exception_persists_failed_status_and_continues(monkeypat
 
     monkeypatch.setattr(bp.batches_repo, "get", AsyncMock(return_value=SimpleNamespace(id=uuid4())))
     monkeypatch.setattr(bp.batches_repo, "update_status", AsyncMock())
+    # Both products fail, but that's not a budget pause -- run_batch still
+    # reaches the natural end and persists the final tally via finish().
+    monkeypatch.setattr(bp.batches_repo, "finish", AsyncMock())
     monkeypatch.setattr(bp.products_repo, "get_by_batch", AsyncMock(return_value=[p1, p2]))
     monkeypatch.setattr(bp, "check_budget_ok", AsyncMock(return_value=True))
     monkeypatch.setattr(bp.settings, "LLM_INTER_PRODUCT_DELAY_SECONDS", 0)

@@ -80,25 +80,65 @@ class BatchProcessor:
         products = await products_repo.get_by_batch(batch_id)
 
         try:
-            await BatchProcessor._run_products(batch_id, products)
+            tally, paused = await BatchProcessor._run_products(batch_id, products)
         finally:
             # The scraper's shared Chromium is a real OS process that outlives
             # this coroutine if nothing closes it. In `finally` so a crash or a
             # cancelled batch cannot leave a browser running.
             await shutdown_browser()
 
-        await batches_repo.update_status(batch_id, "completed")
-        sse_manager.notify(str(batch_id), {"event": "batch_completed"})
+        # BUG FIX: this used to unconditionally write "completed" and fire
+        # "batch_completed" even when the loop broke on the budget guard --
+        # overwriting the "paused_budget_exceeded" status it had JUST set,
+        # and sending a contradictory "completed" event right after "paused".
+        # A paused batch stays paused; only a batch that actually ran every
+        # product to the end gets a completion summary.
+        if paused:
+            return
+
+        status = "completed_with_failures" if tally["failed"] else "completed"
+        await batches_repo.finish(
+            batch_id,
+            status=status,
+            total_products=len(products),
+            succeeded_count=tally["succeeded"],
+            failed_count=tally["failed"],
+            manual_review_count=tally["manual_review"],
+        )
+
+        # The short end-of-batch summary: what the operator actually wants to
+        # know without opening the batch -- how many are ready to export vs.
+        # need attention. Logged server-side and sent over SSE so the
+        # frontend's completion toast (batches/[id]/page.tsx) can show the
+        # real numbers instead of a bare "Batch completed".
+        summary = (
+            f"{tally['succeeded']} ready for QA, "
+            f"{tally['manual_review']} need manual review, "
+            f"{tally['failed']} failed"
+        )
+        logger.info(f"Batch {batch_id} complete: {summary}")
+        sse_manager.notify(str(batch_id), {
+            "event": "batch_completed",
+            "total": len(products),
+            "succeeded": tally["succeeded"],
+            "manual_review": tally["manual_review"],
+            "failed": tally["failed"],
+            "summary": summary,
+        })
 
     @staticmethod
-    async def _run_products(batch_id: UUID, products: list):
+    async def _run_products(batch_id: UUID, products: list) -> tuple[dict[str, int], bool]:
+        tally = {"succeeded": 0, "failed": 0, "manual_review": 0}
+        # Statuses _final_state_to_product_update can set on a successful
+        # pipeline run (see that function above): "ready_for_qa" counts as
+        # succeeded here, "manual_review" and "failed" as themselves.
         for product in products:
             # 1. Budget Guard Check
             if not await check_budget_ok():
                 logger.warning(f"Budget exceeded. Pausing batch {batch_id}")
                 await batches_repo.update_status(batch_id, "paused_budget_exceeded")
                 sse_manager.notify(str(batch_id), {"event": "batch_paused", "reason": "budget_exceeded"})
-                break
+                return tally, True
 
             # 2. Sequential Delay
             await asyncio.sleep(settings.LLM_INTER_PRODUCT_DELAY_SECONDS)
@@ -128,12 +168,19 @@ class BatchProcessor:
                 update = _final_state_to_product_update(final_state)
                 await products_repo.update_product(product.id, update)
 
+                if update["status"] == "ready_for_qa":
+                    tally["succeeded"] += 1
+                elif update["status"] == "manual_review":
+                    tally["manual_review"] += 1
+                else:
+                    tally["failed"] += 1
+
                 sse_manager.notify(str(batch_id), {
                     "event": "product_completed",
                     "product_id": str(product.id),
                     "status": update["status"]
                 })
-                
+
             except Exception as e:
                 logger.error(f"Error processing product {product.id}: {e}")
                 # Isolation gap fix: the per-product try/except already prevents one
@@ -152,6 +199,7 @@ class BatchProcessor:
                     logger.error(
                         f"Could not persist failed status for product {product.id}: {persist_err}"
                     )
+                tally["failed"] += 1
                 sse_manager.notify(str(batch_id), {
                     "event": "product_failed",
                     "product_id": str(product.id),
@@ -159,3 +207,5 @@ class BatchProcessor:
                 })
                 # Isolation: continue to next product
                 continue
+
+        return tally, False
