@@ -29,6 +29,26 @@ class Settings(BaseSettings):
     # Pipeline Logic
     LLM_INTER_PRODUCT_DELAY_SECONDS: float = 1.0
 
+    # How many products run through the pipeline at once. 1 (default)
+    # preserves the original fully-sequential behaviour with zero risk change
+    # for anyone who doesn't touch this. Raising it is the real lever for
+    # batch wall-clock time, but ONLY makes sense together with
+    # MAX_CONCURRENT_LLM_CALLS_PER_PROVIDER below and the Playwright
+    # semaphore (MAX_PLAYWRIGHT_CONTEXTS) -- those are what stop N products
+    # in flight from turning into N simultaneous requests at one provider or
+    # N Chromium browsers.
+    BATCH_CONCURRENCY: int = 1
+
+    # Caps concurrent in-flight requests to ONE PROVIDER (google or groq),
+    # shared across ALL roles and ALL products -- not per-product. This
+    # matters because Writer and Reviewer's FALLBACK is also the Extractor's
+    # PRIMARY (gemini-flash-lite-latest, see llm_provider.py's
+    # ROLE_MODEL_CONFIG): once Groq is exhausted, all three roles pile onto
+    # one Gemini quota, so the limiter has to be provider-global, not
+    # per-role or per-product, or BATCH_CONCURRENCY > 1 just multiplies the
+    # 429 risk it exists to prevent.
+    MAX_CONCURRENT_LLM_CALLS_PER_PROVIDER: int = 2
+
     # Max Chromium browser contexts open at once inside the shared browser.
     # This is the RAM ceiling for scraping: each context is a real set of
     # renderer processes (~150-250MB). It is deliberately SEPARATE from any

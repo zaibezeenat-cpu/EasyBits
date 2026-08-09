@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import random
 from datetime import datetime
 from typing import TypeVar
 
@@ -12,6 +14,23 @@ from app.db.repositories.llm_usage import llm_usage_repo
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
+
+# Substrings seen in real 429 responses from both providers (Groq's own error
+# text and Google's grpc/HTTP wrapper). Deliberately a substring match, not an
+# exception-type check -- langchain wraps provider errors inconsistently
+# across versions, and the WORDING is the one thing both providers guarantee.
+_RATE_LIMIT_MARKERS = ("429", "rate limit", "resource_exhausted", "quota")
+
+# One retry on the SAME provider before falling to the configured fallback --
+# a burst of concurrent products can trip a transient 429 that clears within a
+# second or two, and moving straight to the fallback provider on every burst
+# blip defeats the free-tier cost design faster than necessary.
+_RATE_LIMIT_RETRY_BASE_DELAY_SECONDS = 1.5
+
+
+def _looks_like_rate_limit(error: Exception) -> bool:
+    text = str(error).lower()
+    return any(marker in text for marker in _RATE_LIMIT_MARKERS)
 
 # phase1.md §4: Extractor -> Gemini (cheap/fast structured extraction).
 # Writer/Reviewer -> Groq (free-tier, fast, avoids paying premium-model prices
@@ -117,6 +136,19 @@ def _extract_token_usage(result: object) -> tuple[int, int]:
 class LLMProvider:
     def __init__(self):
         self._models = {}
+        # One semaphore PER PROVIDER (not per role, not per product), shared
+        # by every call() invocation for that provider's lifetime -- see
+        # settings.MAX_CONCURRENT_LLM_CALLS_PER_PROVIDER's docstring for why
+        # this has to be provider-global. Built lazily so a provider with no
+        # traffic never allocates one.
+        self._provider_semaphores: dict[str, asyncio.Semaphore] = {}
+
+    def _semaphore_for(self, provider: str) -> asyncio.Semaphore:
+        if provider not in self._provider_semaphores:
+            self._provider_semaphores[provider] = asyncio.Semaphore(
+                settings.MAX_CONCURRENT_LLM_CALLS_PER_PROVIDER
+            )
+        return self._provider_semaphores[provider]
 
     def _build_model(self, provider: str, model_name: str):
         # Without an explicit timeout a stalled provider hangs the call forever,
@@ -166,54 +198,70 @@ class LLMProvider:
         last_error: Exception | None = None
         for attempt_num, (provider, model_name) in enumerate(attempts):
             is_fallback = attempt_num > 0
-            try:
-                model = self.get_model(provider, model_name)
-                # include_raw=True returns {"raw": AIMessage, "parsed": Model,
-                # "parsing_error": ...}. Needed because the parsed Pydantic model
-                # alone carries NO usage metadata, which is why token counts
-                # logged as 0 and left the budget cap unable to trip.
-                structured_llm = model.with_structured_output(response_model, include_raw=True)
+            # One extra try on the SAME provider if it looks like a 429 --
+            # under BATCH_CONCURRENCY > 1, several products can legitimately
+            # burst-trip a transient rate limit that clears in a couple of
+            # seconds; jumping straight to the fallback provider on every
+            # blip defeats the free-tier design faster than necessary.
+            for rate_limit_retry in range(2):
+                try:
+                    async with self._semaphore_for(provider):
+                        model = self.get_model(provider, model_name)
+                        # include_raw=True returns {"raw": AIMessage, "parsed": Model,
+                        # "parsing_error": ...}. Needed because the parsed Pydantic model
+                        # alone carries NO usage metadata, which is why token counts
+                        # logged as 0 and left the budget cap unable to trip.
+                        structured_llm = model.with_structured_output(response_model, include_raw=True)
 
-                start_time = datetime.now()
-                envelope = await structured_llm.ainvoke(messages)
-                latency_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+                        start_time = datetime.now()
+                        envelope = await structured_llm.ainvoke(messages)
+                        latency_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
-                parsing_error = envelope.get("parsing_error")
-                result = envelope.get("parsed")
-                if parsing_error or result is None:
-                    # Treat unparseable output as a provider failure so the
-                    # fallback runs, instead of returning None downstream.
-                    raise ValueError(f"Structured output parsing failed: {parsing_error}")
+                    parsing_error = envelope.get("parsing_error")
+                    result = envelope.get("parsed")
+                    if parsing_error or result is None:
+                        # Treat unparseable output as a provider failure so the
+                        # fallback runs, instead of returning None downstream.
+                        raise ValueError(f"Structured output parsing failed: {parsing_error}")
 
-                # BUG FIX: estimated_cost_usd was never written, so
-                # llm_usage_repo.get_monthly_spend() always summed to 0 and the
-                # $5 monthly cap could never trip -- the budget guard was
-                # decorative. Token counts come from the provider's own
-                # response metadata; when a provider omits them we record 0
-                # tokens rather than guessing, and the zero is visible in the
-                # log rather than silently inflating a fake spend figure.
-                input_tokens, output_tokens = _extract_token_usage(envelope.get("raw"))
-                cost = estimate_cost_usd(provider, model_name, input_tokens, output_tokens)
+                    # BUG FIX: estimated_cost_usd was never written, so
+                    # llm_usage_repo.get_monthly_spend() always summed to 0 and the
+                    # $5 monthly cap could never trip -- the budget guard was
+                    # decorative. Token counts come from the provider's own
+                    # response metadata; when a provider omits them we record 0
+                    # tokens rather than guessing, and the zero is visible in the
+                    # log rather than silently inflating a fake spend figure.
+                    input_tokens, output_tokens = _extract_token_usage(envelope.get("raw"))
+                    cost = estimate_cost_usd(provider, model_name, input_tokens, output_tokens)
 
-                await llm_usage_repo.log_usage({
-                    "role": role,
-                    "provider": provider,
-                    "model_id": model_name,
-                    "latency_ms": latency_ms,
-                    "was_fallback": is_fallback,
-                    # Column names must match the llm_usage_log schema exactly
-                    # (prompt_/completion_/total_tokens, not input_/output_).
-                    "prompt_tokens": input_tokens,
-                    "completion_tokens": output_tokens,
-                    "total_tokens": input_tokens + output_tokens,
-                    "estimated_cost_usd": cost,
-                })
-                if is_fallback:
-                    logger.warning(f"'{role}' succeeded on fallback provider '{provider}' after primary failed.")
-                return result
-            except Exception as e:
-                last_error = e
-                logger.error(f"LLM call failed for role='{role}' provider='{provider}' model='{model_name}': {e}")
+                    await llm_usage_repo.log_usage({
+                        "role": role,
+                        "provider": provider,
+                        "model_id": model_name,
+                        "latency_ms": latency_ms,
+                        "was_fallback": is_fallback,
+                        # Column names must match the llm_usage_log schema exactly
+                        # (prompt_/completion_/total_tokens, not input_/output_).
+                        "prompt_tokens": input_tokens,
+                        "completion_tokens": output_tokens,
+                        "total_tokens": input_tokens + output_tokens,
+                        "estimated_cost_usd": cost,
+                    })
+                    if is_fallback:
+                        logger.warning(f"'{role}' succeeded on fallback provider '{provider}' after primary failed.")
+                    return result
+                except Exception as e:
+                    last_error = e
+                    logger.error(f"LLM call failed for role='{role}' provider='{provider}' model='{model_name}': {e}")
+                    if rate_limit_retry == 0 and _looks_like_rate_limit(e):
+                        delay = _RATE_LIMIT_RETRY_BASE_DELAY_SECONDS + random.uniform(0, 1.0)
+                        logger.info(
+                            f"'{role}' hit what looks like a rate limit on '{provider}'; "
+                            f"retrying the same provider once after {delay:.1f}s."
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    break
 
         raise RuntimeError(f"All providers failed for role '{role}'") from last_error
 

@@ -22,6 +22,7 @@ that silently fails. For this catalogue the domain tiers are also *better*: ever
 source is an authoritative brand or retailer site rather than an arbitrary
 search result, which is exactly what the no-hallucination contract needs.
 """
+import asyncio
 import logging
 import re
 from typing import NamedTuple
@@ -291,15 +292,23 @@ async def get_cached_search_templates() -> dict[str, str]:
         return {}
 
 
+# Guards the read-modify-write below. Without it, two products discovering
+# sources concurrently (BATCH_CONCURRENCY > 1) can both read the same starting
+# dict, and whichever writes last silently drops the other's learned template
+# -- a lost update, not a crash, so it would never surface as an error.
+_template_cache_lock = asyncio.Lock()
+
+
 async def remember_working_template(domain: str, template: str) -> None:
     """Records the pattern that worked for a domain so it is tried first next time."""
     try:
         from app.db.repositories.settings import settings_repo
-        current = await get_cached_search_templates()
-        if current.get(domain) == template:
-            return
-        current[domain] = template
-        await settings_repo.update_setting(SEARCH_TEMPLATE_SETTING_KEY, current)
+        async with _template_cache_lock:
+            current = await get_cached_search_templates()
+            if current.get(domain) == template:
+                return
+            current[domain] = template
+            await settings_repo.update_setting(SEARCH_TEMPLATE_SETTING_KEY, current)
         logger.info(f"Learned search pattern for {domain}: {template}")
     except Exception as e:
         # Caching is an optimisation; failing to persist must not break discovery.
@@ -423,17 +432,25 @@ async def _get_cached_google_urls(query: str) -> list[str] | None:
     return None
 
 
+# Same lost-update risk as _template_cache_lock above, on the cache that
+# guards the Google CSE free-tier 100/day quota specifically -- a lost write
+# here means the SAME query gets searched again later, burning quota the
+# cache exists to save.
+_google_cache_lock = asyncio.Lock()
+
+
 async def _cache_google_urls(query: str, urls: list[str]) -> None:
     try:
         from app.db.repositories.settings import settings_repo
-        cache = await settings_repo.get_setting(GOOGLE_SEARCH_CACHE_KEY)
-        cache = cache if isinstance(cache, dict) else {}
-        # Bound the cache so one settings row cannot grow without limit.
-        if len(cache) >= _GOOGLE_CACHE_MAX_ENTRIES and query not in cache:
-            for stale_key in list(cache)[: len(cache) - _GOOGLE_CACHE_MAX_ENTRIES + 1]:
-                cache.pop(stale_key, None)
-        cache[query] = urls
-        await settings_repo.update_setting(GOOGLE_SEARCH_CACHE_KEY, cache)
+        async with _google_cache_lock:
+            cache = await settings_repo.get_setting(GOOGLE_SEARCH_CACHE_KEY)
+            cache = cache if isinstance(cache, dict) else {}
+            # Bound the cache so one settings row cannot grow without limit.
+            if len(cache) >= _GOOGLE_CACHE_MAX_ENTRIES and query not in cache:
+                for stale_key in list(cache)[: len(cache) - _GOOGLE_CACHE_MAX_ENTRIES + 1]:
+                    cache.pop(stale_key, None)
+            cache[query] = urls
+            await settings_repo.update_setting(GOOGLE_SEARCH_CACHE_KEY, cache)
     except Exception as e:
         logger.warning(f"Could not write Google search cache: {e}")
 

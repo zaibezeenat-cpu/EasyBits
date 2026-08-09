@@ -128,84 +128,133 @@ class BatchProcessor:
 
     @staticmethod
     async def _run_products(batch_id: UUID, products: list) -> tuple[dict[str, int], bool]:
+        """
+        Runs every product's pipeline, bounded by settings.BATCH_CONCURRENCY.
+
+        BATCH_CONCURRENCY=1 (the default) preserves the original serial
+        behaviour: asyncio.Semaphore(1) admits exactly one worker at a time,
+        in submission order. Raising it is what actually cuts batch
+        wall-clock time -- but the concurrency-SAFE pieces this depends on
+        (the per-provider LLM semaphore in llm_provider.py, the Playwright
+        context semaphore, the locks on the two quota caches in
+        source_discovery.py) all live elsewhere; this method only adds the
+        product-level fan-out on top of them.
+
+        Tally counting (`tally["x"] += 1`) is safe without a lock: Python's
+        asyncio is single-threaded and cooperative, and nothing here awaits
+        between reading and writing a tally value, so no other coroutine can
+        interleave mid-increment.
+        """
         tally = {"succeeded": 0, "failed": 0, "manual_review": 0}
-        # Statuses _final_state_to_product_update can set on a successful
-        # pipeline run (see that function above): "ready_for_qa" counts as
-        # succeeded here, "manual_review" and "failed" as themselves.
-        for product in products:
-            # 1. Budget Guard Check
-            if not await check_budget_ok():
-                logger.warning(f"Budget exceeded. Pausing batch {batch_id}")
-                await batches_repo.update_status(batch_id, "paused_budget_exceeded")
-                sse_manager.notify(str(batch_id), {"event": "batch_paused", "reason": "budget_exceeded"})
-                return tally, True
+        semaphore = asyncio.Semaphore(max(1, settings.BATCH_CONCURRENCY))
+        # Concurrency-safe "pause once" latch: several workers can discover
+        # the budget is exceeded at roughly the same time, but the batch
+        # must be marked paused, and the SSE event fired, exactly once.
+        pause_lock = asyncio.Lock()
+        pause_state = {"paused": False, "notified": False}
 
-            # 2. Sequential Delay
-            await asyncio.sleep(settings.LLM_INTER_PRODUCT_DELAY_SECONDS)
+        async def _mark_paused() -> None:
+            async with pause_lock:
+                if pause_state["notified"]:
+                    return
+                pause_state["notified"] = True
+                pause_state["paused"] = True
+            logger.warning(f"Budget exceeded. Pausing batch {batch_id}")
+            await batches_repo.update_status(batch_id, "paused_budget_exceeded")
+            sse_manager.notify(str(batch_id), {"event": "batch_paused", "reason": "budget_exceeded"})
 
-            # 3. Process Product
-            try:
-                from app.models.raw_input import RawProductInput
-                raw_input_data = product.raw_input or {}
-                raw_input = RawProductInput.model_validate(raw_input_data)
+        async def _process_one(product) -> None:
+            async with semaphore:
+                if pause_state["paused"]:
+                    return
 
-                state = PipelineState(
-                    product_id=product.id,
-                    batch_id=batch_id,
-                    raw_input=raw_input
-                )
-                
-                # Execute pipeline
-                raw_final_state = await pipeline.ainvoke(state)
-                # LangGraph returns the compiled state as a dict matching the
-                # schema, not necessarily a PipelineState instance -- normalize
-                # it so the field access below is reliable either way.
-                final_state = (
-                    raw_final_state if isinstance(raw_final_state, PipelineState)
-                    else PipelineState.model_validate(raw_final_state)
-                )
+                # 1. Budget Guard Check -- re-checked per worker (not once for
+                # the whole batch) so a mid-batch overrun under concurrency is
+                # still caught before MORE products start, not just the next
+                # one in a single queue.
+                if not await check_budget_ok():
+                    await _mark_paused()
+                    return
+                if pause_state["paused"]:
+                    # Another worker paused the batch while this one awaited
+                    # the budget check above.
+                    return
 
-                update = _final_state_to_product_update(final_state)
-                await products_repo.update_product(product.id, update)
+                # 2. Pacing delay (see settings.LLM_INTER_PRODUCT_DELAY_SECONDS).
+                await asyncio.sleep(settings.LLM_INTER_PRODUCT_DELAY_SECONDS)
 
-                if update["status"] == "ready_for_qa":
-                    tally["succeeded"] += 1
-                elif update["status"] == "manual_review":
-                    tally["manual_review"] += 1
-                else:
-                    tally["failed"] += 1
-
-                sse_manager.notify(str(batch_id), {
-                    "event": "product_completed",
-                    "product_id": str(product.id),
-                    "status": update["status"]
-                })
-
-            except Exception as e:
-                logger.error(f"Error processing product {product.id}: {e}")
-                # Isolation gap fix: the per-product try/except already prevents one
-                # product from crashing the whole batch, but previously the crashed
-                # product was only announced over SSE and never persisted -- it stayed
-                # 'pending' forever, invisible in the Review Queue. Mark it 'failed'
-                # with the error so it surfaces for the operator. This DB write is
-                # itself guarded: if even this fails, we still continue the batch.
+                # 3. Process Product
                 try:
-                    await products_repo.update_product(product.id, {
-                        "status": "failed",
-                        "failure_reason": "pipeline_exception",
-                        "failure_detail": {"detail": str(e)},
-                    })
-                except Exception as persist_err:
-                    logger.error(
-                        f"Could not persist failed status for product {product.id}: {persist_err}"
-                    )
-                tally["failed"] += 1
-                sse_manager.notify(str(batch_id), {
-                    "event": "product_failed",
-                    "product_id": str(product.id),
-                    "error": str(e)
-                })
-                # Isolation: continue to next product
-                continue
+                    from app.models.raw_input import RawProductInput
+                    raw_input_data = product.raw_input or {}
+                    raw_input = RawProductInput.model_validate(raw_input_data)
 
-        return tally, False
+                    state = PipelineState(
+                        product_id=product.id,
+                        batch_id=batch_id,
+                        raw_input=raw_input
+                    )
+
+                    # Execute pipeline
+                    raw_final_state = await pipeline.ainvoke(state)
+                    # LangGraph returns the compiled state as a dict matching the
+                    # schema, not necessarily a PipelineState instance -- normalize
+                    # it so the field access below is reliable either way.
+                    final_state = (
+                        raw_final_state if isinstance(raw_final_state, PipelineState)
+                        else PipelineState.model_validate(raw_final_state)
+                    )
+
+                    update = _final_state_to_product_update(final_state)
+                    await products_repo.update_product(product.id, update)
+
+                    if update["status"] == "ready_for_qa":
+                        tally["succeeded"] += 1
+                    elif update["status"] == "manual_review":
+                        tally["manual_review"] += 1
+                    else:
+                        tally["failed"] += 1
+
+                    sse_manager.notify(str(batch_id), {
+                        "event": "product_completed",
+                        "product_id": str(product.id),
+                        "status": update["status"]
+                    })
+
+                except Exception as e:
+                    logger.error(f"Error processing product {product.id}: {e}")
+                    # Isolation gap fix: the per-product try/except already prevents one
+                    # product from crashing the whole batch, but previously the crashed
+                    # product was only announced over SSE and never persisted -- it stayed
+                    # 'pending' forever, invisible in the Review Queue. Mark it 'failed'
+                    # with the error so it surfaces for the operator. This DB write is
+                    # itself guarded: if even this fails, we still continue the batch.
+                    try:
+                        await products_repo.update_product(product.id, {
+                            "status": "failed",
+                            "failure_reason": "pipeline_exception",
+                            "failure_detail": {"detail": str(e)},
+                        })
+                    except Exception as persist_err:
+                        logger.error(
+                            f"Could not persist failed status for product {product.id}: {persist_err}"
+                        )
+                    tally["failed"] += 1
+                    sse_manager.notify(str(batch_id), {
+                        "event": "product_failed",
+                        "product_id": str(product.id),
+                        "error": str(e)
+                    })
+
+        # return_exceptions=True: _process_one already catches everything
+        # relevant to ONE product internally, but this is the outer isolation
+        # net -- an unexpected error here (e.g. a DB call outside the inner
+        # try) must not cancel every other in-flight product.
+        results = await asyncio.gather(
+            *(_process_one(product) for product in products), return_exceptions=True
+        )
+        for product, result in zip(products, results, strict=False):
+            if isinstance(result, Exception):
+                logger.error(f"Unhandled error processing product {product.id}: {result}")
+
+        return tally, pause_state["paused"]
