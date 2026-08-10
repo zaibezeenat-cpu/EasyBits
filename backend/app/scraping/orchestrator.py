@@ -412,38 +412,36 @@ async def _official_out_of_stock_fallback(
     does not stock it. For an out-of-stock item that inference is wrong: the
     page exists, it just isn't in the search index.
 
-    Four fallbacks, tried in order, official domains ONLY (2026-08-09,
-    owner-directed -- explicitly scoped to the brand's own site, not
-    retailers; owner-requested to be "universal" across platforms rather
-    than WooCommerce-only, and to avoid depending on a Google key the owner
-    does not currently have):
+    2026-08-10: WooCommerce Store API and Shopify predictive search
+    (tiers 1-2 below) are now ALSO tried up front by
+    _official_fast_json_lookup(), called before the search-pattern cascade
+    even starts (see scrape_product). By the time this function runs --
+    only reached once that cascade has ALREADY bailed -- those two have
+    already failed for this domain moments earlier in the same pass, so
+    repeating them here would be a pure wasted round-trip. This function is
+    now genuinely the DEEPER fallback: the two-request cascade this
+    docstring used to describe as tiers 1-2 is intentionally NOT repeated.
 
-      1. WooCommerce's public Store API (_woocommerce_store_api_fallback) --
-         no key needed, directly queries the product data the "hide out of
-         stock" setting only hides from the THEME, not the data itself.
-      2. Shopify's public Predictive Search API
-         (_shopify_predictive_search_fallback) -- also no key needed. The
-         fix there is a single documented Shopify query parameter,
-         `resources[options][unavailable_products]=show`, which forces
-         sold-out products BACK INTO results that exclude them by default.
-      3. Shopify's full catalog listing (_shopify_catalog_scan_fallback) --
+    Two fallbacks, tried in order, official domains ONLY (2026-08-09,
+    owner-directed -- explicitly scoped to the brand's own site, not
+    retailers):
+
+      1. Shopify's full catalog listing (_shopify_catalog_scan_fallback) --
          added 2026-08-10 after the owner's LIVE test on anex.pk showed
-         predictive search, even with the flag above, did not return a real
-         out-of-stock product (AG-10). /products.json is the store's actual
-         catalogue data, not a search index, so it is what actually found
-         that product. More expensive (paginated, up to 1000 products), so
-         tried only after the cheaper predictive-search attempt.
-      4. A `site:{domain}`-restricted Google search, IF configured (bonus
+         predictive search, even with unavailable_products=show, did not
+         return a real out-of-stock product (AG-10). /products.json is the
+         store's actual catalogue data, not a search index, so it is what
+         actually found that product. More expensive (paginated, up to
+         1000 products) than predictive search, which is exactly why it
+         was never folded into the fast path.
+      2. A `site:{domain}`-restricted Google search, IF configured (bonus
          for any OTHER platform, e.g. Magento, custom-built; zero cost when
          no key is set, which is the owner's current setup).
 
-    Cheap-to-expensive, no-key-first ordering: 1-3 are each plain JSON
-    requests with no external dependency and no daily quota, so they're all
-    tried before touching the optional, quota-limited Google tier. Every
-    candidate this finds still goes through the SAME identity checks as any
-    other source (model_matches_identity, brand_matches_identity for a
-    shared host) -- this only widens WHERE a URL/product can be found, never
-    what counts as proof once it's fetched.
+    Every candidate this finds still goes through the SAME identity checks
+    as any other source (model_matches_identity, brand_matches_identity for
+    a shared host) -- this only widens WHERE a URL/product can be found,
+    never what counts as proof once it's fetched.
 
     Returns a scraped_data-shaped dict on success, or None (never raises) --
     callers fall through to the existing bail-out/settle behaviour exactly
@@ -453,16 +451,6 @@ async def _official_out_of_stock_fallback(
         return not require_brand_identity or brand_matches_identity(
             brand_name, candidate["url"], candidate["candidate_titles"]
         )
-
-    # Sequential, not gathered: each is a short-circuit -- once one platform
-    # fallback finds the product, there's no reason to also query the other.
-    woo = await _woocommerce_store_api_fallback(domain, model_number)
-    if woo and _identity_ok(woo):
-        return woo
-
-    shopify = await _shopify_predictive_search_fallback(domain, model_number)
-    if shopify and _identity_ok(shopify):
-        return shopify
 
     shopify_catalog = await _shopify_catalog_scan_fallback(domain, model_number)
     if shopify_catalog and _identity_ok(shopify_catalog):
@@ -504,6 +492,51 @@ async def _official_out_of_stock_fallback(
             "content": result.content,
             "candidate_titles": list(result.candidate_titles),
         }
+
+    return None
+
+
+async def _official_fast_json_lookup(
+    domain: str, model_number: str, brand_name: str, require_brand_identity: bool
+) -> dict[str, Any] | None:
+    """
+    THE FAST PATH for official domains (2026-08-10, owner-directed: "we now
+    know .json can fetch all details, this can make scraping 100x faster").
+
+    Tried FIRST, before any curl/Playwright search-pattern guessing, for
+    EVERY official-domain lookup -- not just as the out-of-stock fallback
+    this technique was originally added for. A single structured JSON
+    request replaces the whole search-a-URL-pattern -> follow-to-detail-
+    page -> maybe-escalate-to-Playwright cascade whenever the official site
+    runs WooCommerce or Shopify: no guessing which of the 5 search URL
+    shapes the platform uses, no HTML to parse, and -- critically -- no
+    Chromium launch ever needed, since the JSON already IS the data.
+
+    Deliberately only the two CHEAP, single-request lookups (WooCommerce
+    Store API search, Shopify predictive search). The more expensive
+    paginated Shopify catalog scan (_shopify_catalog_scan_fallback) stays
+    reserved for _official_out_of_stock_fallback's deeper retry below, not
+    this fast path -- pulling it in here would cost up to 4 sequential
+    requests on every miss, defeating the point of a FAST path.
+
+    Returns None (never raises) for any site that isn't one of these two
+    platforms, or when neither finds the product -- the caller falls
+    through to the existing search-pattern cascade exactly as before, and
+    that cascade's own out-of-stock fallback (including the catalog scan)
+    still runs as the deeper safety net.
+    """
+    def _identity_ok(candidate: dict[str, Any]) -> bool:
+        return not require_brand_identity or brand_matches_identity(
+            brand_name, candidate["url"], candidate["candidate_titles"]
+        )
+
+    woo = await _woocommerce_store_api_fallback(domain, model_number)
+    if woo and _identity_ok(woo):
+        return woo
+
+    shopify = await _shopify_predictive_search_fallback(domain, model_number)
+    if shopify and _identity_ok(shopify):
+        return shopify
 
     return None
 
@@ -626,7 +659,38 @@ async def scrape_product(
                 )
                 break
             sources_before_domain = len(scraped_data)
-            for source in candidates:
+
+            # 2026-08-10 (owner-directed: "we now know .json can fetch all
+            # details, this can make scraping 100x faster"). For OFFICIAL
+            # domains, try the direct platform JSON API FIRST -- one request
+            # can replace the entire search-pattern-guessing cascade below
+            # when the site runs WooCommerce or Shopify (see
+            # _official_fast_json_lookup's docstring). This is now the
+            # PRIMARY path for every official-domain lookup, not just an
+            # out-of-stock fallback -- the deeper fallback further down
+            # still exists for when this fast path doesn't apply (site is
+            # neither platform) or doesn't find the product.
+            #
+            # Pass 1 only: this is a plain httpx JSON call needing no
+            # browser either way, so pass 2's "Playwright now allowed" gains
+            # it nothing -- trying it again there would just repeat the same
+            # request for the same answer.
+            fast_hit = False
+            if pass_num == 1 and candidates and candidates[0]["source_type"] == "official":
+                fast = await _official_fast_json_lookup(
+                    domain, model_number, brand_name,
+                    require_brand_identity=bool(candidates[0].get("scope_path")),
+                )
+                if fast:
+                    logger.info(
+                        f"{domain}: found {brand_name} {model_number} via the fast "
+                        f"platform-JSON path -- skipped the search-pattern cascade entirely."
+                    )
+                    scraped_data.append(fast)
+                    settled_domains.add(domain)
+                    fast_hit = True
+
+            for source in ([] if fast_hit else candidates):
                 attempted += 1
                 try:
                     result = await smart_fetch(

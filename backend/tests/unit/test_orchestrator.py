@@ -883,3 +883,150 @@ async def test_official_fallback_tries_catalog_scan_when_predictive_search_misse
     assert "failure" not in result
     assert "ag-10-handy-chopper-with-10-functions" in result["scraped_data"][0]["url"]
     assert any("products.json" in u for u in call_urls), "catalog scan must have been tried"
+
+
+# --- The fast path itself (2026-08-10, owner-directed "100x faster") -------
+
+@pytest.mark.asyncio
+async def test_official_domain_skips_smart_fetch_entirely_when_the_fast_path_hits(
+    one_official_source, monkeypatch
+):
+    """
+    THE ACTUAL SPEED CLAIM: when the official domain's JSON API finds the
+    product, smart_fetch (the whole curl-then-maybe-Playwright cascade)
+    must never be called at all -- one JSON request replaces it entirely.
+    """
+    payload = [{
+        "name": "Anex AG-01 Handy Pull Chopper", "sku": "AG-01",
+        "permalink": "https://brand.pk/product/ag-01/",
+        "short_description": "Manual chopper.", "description": "", "is_in_stock": True,
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    smart_fetch_called = False
+
+    async def fail_if_called(*args, **kwargs):
+        nonlocal smart_fetch_called
+        smart_fetch_called = True
+        raise AssertionError("smart_fetch must not be called when the fast path hits")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fail_if_called)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" not in result
+    assert result["scraped_data"][0]["url"] == "https://brand.pk/product/ag-01/"
+    assert not smart_fetch_called
+
+
+@pytest.mark.asyncio
+async def test_fast_path_tiers_are_only_tried_once_never_repeated_by_the_deep_fallback(
+    one_official_source, monkeypatch
+):
+    """
+    The fast path (WooCommerce Store API, Shopify predictive search) runs
+    ONCE, in pass 1, for every official domain. When it misses and the
+    normal search cascade also bails, pass 2's deeper fallback
+    (_official_out_of_stock_fallback) must NOT repeat those same two
+    requests -- they already failed for this domain moments earlier in the
+    same pass -- it should go straight to the catalog scan, its next real
+    tier.
+    """
+    call_urls = []
+
+    async def counting_get(self, url, **kwargs):
+        call_urls.append(url)
+        return _FakeResponse(200, [])  # never finds anything, so every tier runs
+
+    class _CountingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        get = counting_get
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda **kw: _CountingClient())
+    monkeypatch.setattr(orchestrator.google_search_client, "api_key", None)
+    monkeypatch.setattr(orchestrator.google_search_client, "cx", None)
+
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "Anex Pakistan -- browse our full range.")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    await orchestrator.scrape_product("Anex", "AG-01")
+
+    woo_calls = [u for u in call_urls if "wp-json/wc/store" in u]
+    predictive_calls = [u for u in call_urls if "search/suggest.json" in u]
+    catalog_calls = [u for u in call_urls if "/products.json" in u]
+
+    assert len(woo_calls) == 1, "WooCommerce Store API must be tried exactly once (fast path, pass 1)"
+    assert len(predictive_calls) == 1, "Shopify predictive search must be tried exactly once (fast path, pass 1)"
+    assert len(catalog_calls) >= 1, "the deep fallback's catalog scan must still run when everything else misses"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_miss_falls_through_to_the_normal_cascade(
+    one_official_source, monkeypatch
+):
+    """When the fast path finds nothing, the existing search-pattern cascade
+    must still run exactly as before -- this is additive, not a replacement."""
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(404, {})),
+    )
+
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        if "/products/" in url:
+            return _result(url, "Anex AG-01 Handy Pull Chopper full specifications")
+        return _result(url, "53 results found for AG-01",
+                       links=["https://brand.pk/products/anex-ag-01"])
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" not in result
+    assert result["scraped_data"][0]["url"] == "https://brand.pk/products/anex-ag-01"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_is_never_tried_for_a_retailer_domain(monkeypatch):
+    """Scoped to official domains only -- a retailer must go straight to the
+    normal search cascade, never touching httpx.AsyncClient at all."""
+    async def sources(_brand, _model, **_kw):
+        return [{"url": "https://retailer.pk/search?q=x", "source_type": "trusted_secondary",
+                 "domain": "retailer.pk"}]
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(orchestrator, "resolve_sources", sources)
+    monkeypatch.setattr(orchestrator, "remember_working_template", noop)
+
+    httpx_called = False
+
+    def fail_if_called(**kw):
+        nonlocal httpx_called
+        httpx_called = True
+        raise AssertionError("httpx must not be touched for a retailer domain")
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", fail_if_called)
+
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        if "/products/" in url:
+            return _result(url, "Anex AG-01 full specifications")
+        return _result(url, "53 results found for AG-01",
+                       links=["https://retailer.pk/products/anex-ag-01"])
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" not in result
+    assert not httpx_called
