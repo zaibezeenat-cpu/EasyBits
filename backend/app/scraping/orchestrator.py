@@ -73,9 +73,55 @@ def _corroboration_satisfied(scraped_data: list[dict[str, str]]) -> bool:
     return any(doc.get("source_type") == "official" for doc in scraped_data)
 
 
+def _brand_identity_ok(
+    source_type: str,
+    require_brand_identity: bool,
+    brand_name: str,
+    url: str,
+    titles: list[str],
+    *,
+    log_context: str,
+) -> bool:
+    """
+    Gate for accepting a source once its MODEL NUMBER is already confirmed --
+    every call site checks model_matches_identity (or an equivalent, like the
+    platform APIs' own search-match) BEFORE this ever runs.
+
+    2026-08-10 (owner-directed, live): "model number match kar gaye kafi hai
+    ... bohot kam log brand mention karte hain ... yehi main karta hoon, yehi
+    mey chahta hoon." A trusted_secondary retailer (the owner's own curated
+    list -- Settings -> Trusted Secondary Sources) routinely copies the
+    manufacturer's own title verbatim, which very often omits the brand name
+    entirely -- the real reported case is Anex's own official title for
+    AG-10, which never says "Anex" either. For trusted_secondary specifically,
+    a strict model-number match is accepted even when the title/URL never
+    names the brand: this is the NORMAL case in this business, not the
+    exception, and the pre-existing corroboration safety net (trusted_secondary
+    is never authoritative alone -- see _corroboration_satisfied) already
+    bounds the residual risk of a genuinely wrong-brand page slipping in.
+
+    official and web are UNCHANGED and stay strict: official is the one tier
+    trusted alone, so a wrong brand there is a real problem, and web is
+    unvetted by definition -- neither gets this softening.
+    """
+    if not require_brand_identity:
+        return True
+    if brand_matches_identity(brand_name, url, titles):
+        return True
+    if source_type == "trusted_secondary":
+        logger.info(
+            f"Accepting {log_context} on model-number match alone (title/URL "
+            f"does not name '{brand_name}') -- trusted_secondary source, "
+            f"never upgraded past that tier; corroboration still requires "
+            f"independent agreement before anything here is trusted."
+        )
+        return True
+    return False
+
+
 async def _follow_to_detail_page(search_result, model_number: str,
                                  brand_name: str = "", require_brand_identity: bool = False,
-                                 allow_tier2: bool = True):
+                                 allow_tier2: bool = True, source_type: str = "official"):
     """
     Follows the best product link from a search page to the product detail page.
 
@@ -138,8 +184,9 @@ async def _follow_to_detail_page(search_result, model_number: str,
                 f"model variant -- avoiding a suffix/colour mix-up."
             )
             continue
-        if require_brand_identity and not brand_matches_identity(
-            brand_name, detail.url or link, detail.candidate_titles
+        if not _brand_identity_ok(
+            source_type, require_brand_identity, brand_name,
+            detail.url or link, detail.candidate_titles, log_context=link,
         ):
             logger.info(
                 f"Rejected {link}: names {model_number} but does not identify as "
@@ -543,8 +590,9 @@ async def _platform_fast_json_lookup(
     through to the existing search-pattern cascade exactly as before.
     """
     def _identity_ok(candidate: dict[str, Any]) -> bool:
-        return not require_brand_identity or brand_matches_identity(
-            brand_name, candidate["url"], candidate["candidate_titles"]
+        return _brand_identity_ok(
+            source_type, require_brand_identity, brand_name,
+            candidate["url"], candidate["candidate_titles"], log_context=candidate["url"],
         )
 
     woo = await _woocommerce_store_api_fallback(domain, model_number, source_type=source_type)
@@ -833,6 +881,7 @@ async def scrape_product(
                         # which brand identity has to be proven.
                         require_brand_identity=bool(source.get("scope_path")),
                         allow_tier2=allow_tier2,
+                        source_type=source["source_type"],
                     )
                 if detail is None:
                     logger.info(

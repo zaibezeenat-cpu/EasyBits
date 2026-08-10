@@ -129,6 +129,81 @@ async def test_detail_page_for_the_wrong_product_is_rejected(one_source, monkeyp
     assert "failure" in result
 
 
+# --- Brand identity on a shared host: model match is enough for a curated
+# retailer, but NOT for official or web sources --------------------------
+#
+# Owner-directed (2026-08-10, live): "model number match kar gaye kafi hai
+# ... bohot kam log brand mention karte hain ... yehi main karta hoon, yehi
+# mey chahta hoon." A trusted_secondary retailer (Settings -> Trusted
+# Secondary Sources -- an owner-curated list) routinely copies the
+# manufacturer's own title verbatim, which very often omits the brand name
+# entirely. Held pending this exact confirmation before implementing (see
+# the wiggly-painting-pebble plan's B0-retailer-fix) -- this is that
+# confirmation.
+
+
+@pytest.mark.asyncio
+async def test_trusted_secondary_accepted_on_model_match_alone_when_title_omits_brand(monkeypatch):
+    """The real reported shape: title/URL never says "Anex", only the model."""
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "AG-10 Handy Chopper With 10 Functions")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    search_result = _result(
+        "https://surmawala.pk/search?q=AG-10", "53 results for AG-10",
+        links=["https://surmawala.pk/products/ag-10-handy-chopper"],
+    )
+    detail = await orchestrator._follow_to_detail_page(
+        search_result, "AG-10", brand_name="Anex",
+        require_brand_identity=True, source_type="trusted_secondary",
+    )
+    assert detail is not None, (
+        "a curated retailer must be accepted on a strict model-number match "
+        "even when its title never names the brand"
+    )
+
+
+@pytest.mark.asyncio
+async def test_official_source_is_still_rejected_when_brand_not_named(monkeypatch):
+    """Regression guard: official stays the authoritative-alone tier, so a
+    wrong-brand page there is a real problem -- unlike trusted_secondary,
+    this must NOT be softened."""
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "AG-10 Handy Chopper With 10 Functions")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    search_result = _result(
+        "https://dwphome.pk/search?q=AG-10", "53 results for AG-10",
+        links=["https://dwphome.pk/products/ag-10-handy-chopper"],
+    )
+    detail = await orchestrator._follow_to_detail_page(
+        search_result, "AG-10", brand_name="Anex",
+        require_brand_identity=True, source_type="official",
+    )
+    assert detail is None
+
+
+@pytest.mark.asyncio
+async def test_web_source_is_still_rejected_when_brand_not_named(monkeypatch):
+    """Regression guard: `web` is unvetted by definition -- never softened."""
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "AG-10 Handy Chopper With 10 Functions")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    search_result = _result(
+        "https://randomblog.pk/search?q=AG-10", "53 results for AG-10",
+        links=["https://randomblog.pk/products/ag-10-handy-chopper"],
+    )
+    detail = await orchestrator._follow_to_detail_page(
+        search_result, "AG-10", brand_name="Anex",
+        require_brand_identity=True, source_type="web",
+    )
+    assert detail is None
+
+
 @pytest.mark.asyncio
 async def test_no_configured_sources_escalates_clearly(monkeypatch):
     async def no_sources(_brand, _model, **_kw):
@@ -1096,4 +1171,38 @@ async def test_fast_path_miss_on_a_retailer_falls_through_to_the_normal_cascade(
 
     assert "failure" not in result
     assert result["scraped_data"][0]["url"] == "https://retailer.pk/products/anex-ag-01"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_accepts_a_trusted_secondary_retailer_on_model_match_alone(monkeypatch):
+    """
+    The fast path's WooCommerce Store API hit goes through the exact same
+    trusted_secondary soft-accept as the search-pattern cascade: a retailer's
+    own product `name` field never says "Anex", only the model.
+    """
+    async def sources(_brand, _model, **_kw):
+        return [{"url": "https://retailer.pk/search?q=x", "source_type": "trusted_secondary",
+                 "domain": "retailer.pk", "scope_path": "/appliances"}]
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(orchestrator, "resolve_sources", sources)
+    monkeypatch.setattr(orchestrator, "remember_working_template", noop)
+
+    payload = [{
+        "name": "AG-10 Handy Chopper With 10 Functions", "sku": "AG-10",
+        "permalink": "https://retailer.pk/product/ag-10/",
+        "short_description": "Handy chopper.", "description": "", "is_in_stock": True,
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+    monkeypatch.setattr(orchestrator, "smart_fetch",
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("fast path should have hit")))
+
+    result = await orchestrator.scrape_product("Anex", "AG-10")
+
+    assert "failure" not in result
     assert result["scraped_data"][0]["source_type"] == "trusted_secondary"
