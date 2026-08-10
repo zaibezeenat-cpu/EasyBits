@@ -1,13 +1,15 @@
 import logging
 import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
+
+import httpx
 
 from app.core.config import settings
 from app.models.failure import FailureInfo
 from app.scraping.fetcher import smart_fetch
 from app.scraping.google_search_client import google_search_client
-from app.scraping.playwright_client import is_block_page
+from app.scraping.playwright_client import _clean_html_to_text, is_block_page
 from app.scraping.source_discovery import (
     brand_matches_identity,
     model_matches_identity,
@@ -150,6 +152,159 @@ async def _follow_to_detail_page(search_result, model_number: str,
     return None
 
 
+_WOOCOMMERCE_STORE_API_TIMEOUT_SECONDS = 12.0
+
+
+def _normalise_for_match(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+async def _woocommerce_store_api_fallback(
+    domain: str, model_number: str
+) -> dict[str, Any] | None:
+    """
+    WooCommerce's built-in public Store REST API -- no key, no auth, enabled
+    by default on essentially every WooCommerce install (it's what powers the
+    theme's own cart/checkout AJAX).
+
+    WHY THIS WORKS WHEN THE SITE'S OWN SEARCH BOX DOESN'T: "hide out of stock
+    items" is a CATALOG/THEME display setting (WooCommerce Settings ->
+    Products -> Inventory) -- it controls what the storefront's search
+    widget and shop-page templates render, not what the underlying product
+    data contains. The Store API queries WooCommerce's product data
+    directly, so an out-of-stock product still comes back in the JSON with
+    `is_in_stock: false`, even on a store where the theme's search box would
+    never show it.
+
+    Returns a scraped_data-shaped dict built from the API's OWN name/sku/
+    description fields (no second page fetch needed -- the API already
+    returns everything the Extractor needs), or None on any failure: wrong
+    platform (this site isn't WooCommerce), the endpoint disabled, no
+    matching product, network error. Never raises.
+    """
+    url = f"https://{domain}/wp-json/wc/store/v1/products?search={quote_plus(model_number)}"
+    try:
+        async with httpx.AsyncClient(timeout=_WOOCOMMERCE_STORE_API_TIMEOUT_SECONDS) as client:
+            response = await client.get(url)
+        if response.status_code != 200:
+            return None
+        products = response.json()
+        if not isinstance(products, list):
+            return None
+    except Exception as e:
+        logger.debug(f"WooCommerce Store API not usable on {domain}: {e}")
+        return None
+
+    needle = _normalise_for_match(model_number)
+    if not needle:
+        return None
+
+    for product in products:
+        name = str(product.get("name") or "")
+        sku = str(product.get("sku") or "")
+        permalink = str(product.get("permalink") or "")
+        identity = _normalise_for_match(name) + _normalise_for_match(sku) + _normalise_for_match(permalink)
+        if needle not in identity:
+            continue
+
+        # The API's own description/short_description IS the product page's
+        # real copy (WooCommerce renders these verbatim on the front end),
+        # so no second fetch is needed -- just strip the HTML the API
+        # returns it as.
+        description_html = f"{product.get('name', '')}\n{product.get('short_description', '')}\n{product.get('description', '')}"
+        content = _clean_html_to_text(description_html)
+        if not content.strip():
+            continue
+
+        stock_note = "in stock" if product.get("is_in_stock") else "OUT OF STOCK"
+        logger.info(
+            f"Found {model_number} on {domain} via the WooCommerce Store API "
+            f"({stock_note}) after the site's own search excluded it."
+        )
+        return {
+            "url": permalink or url,
+            "source_type": "official",
+            "content": content,
+            "candidate_titles": [name] if name else [],
+        }
+
+    return None
+
+
+_SHOPIFY_PREDICTIVE_SEARCH_TIMEOUT_SECONDS = 12.0
+
+
+async def _shopify_predictive_search_fallback(
+    domain: str, model_number: str
+) -> dict[str, Any] | None:
+    """
+    Shopify's public Predictive Search API -- no key, no auth, same endpoint
+    the theme's own search-as-you-type box calls client-side.
+
+    The fix here is a single documented query parameter:
+    `resources[options][unavailable_products]=show` -- Shopify's own
+    official flag to include sold-out products in predictive search results,
+    which are EXCLUDED by default. Without it this endpoint has exactly the
+    same blind spot as the theme's visible search box; with it, an
+    out-of-stock product's page is returned like any other.
+
+    Returns a scraped_data-shaped dict built from the API's own title/body
+    fields (no second fetch needed), or None on any failure: not a Shopify
+    site, endpoint disabled, no matching product, network error. Never
+    raises.
+    """
+    url = (
+        f"https://{domain}/search/suggest.json"
+        f"?q={quote_plus(model_number)}"
+        f"&resources[type]=product"
+        f"&resources[limit]=10"
+        f"&resources[options][unavailable_products]=show"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=_SHOPIFY_PREDICTIVE_SEARCH_TIMEOUT_SECONDS) as client:
+            response = await client.get(url)
+        if response.status_code != 200:
+            return None
+        products = (response.json().get("resources", {}).get("results", {}) or {}).get("products") or []
+        if not isinstance(products, list):
+            return None
+    except Exception as e:
+        logger.debug(f"Shopify predictive search not usable on {domain}: {e}")
+        return None
+
+    needle = _normalise_for_match(model_number)
+    if not needle:
+        return None
+
+    for product in products:
+        title = str(product.get("title") or "")
+        handle = str(product.get("handle") or "")
+        path = str(product.get("url") or "")
+        identity = _normalise_for_match(title) + _normalise_for_match(handle) + _normalise_for_match(path)
+        if needle not in identity:
+            continue
+
+        content = _clean_html_to_text(f"{title}\n{product.get('body', '')}")
+        if not content.strip():
+            continue
+
+        product_url = path if path.startswith("http") else f"https://{domain}{path}"
+        stock_note = "in stock" if product.get("available") else "OUT OF STOCK"
+        logger.info(
+            f"Found {model_number} on {domain} via Shopify predictive search "
+            f"({stock_note}, unavailable_products=show) after the site's own "
+            f"search excluded it."
+        )
+        return {
+            "url": product_url,
+            "source_type": "official",
+            "content": content,
+            "candidate_titles": [title] if title else [],
+        }
+
+    return None
+
+
 async def _official_out_of_stock_fallback(
     domain: str, model_number: str, brand_name: str, require_brand_identity: bool
 ) -> dict[str, Any] | None:
@@ -163,20 +318,51 @@ async def _official_out_of_stock_fallback(
     does not stock it. For an out-of-stock item that inference is wrong: the
     page exists, it just isn't in the search index.
 
-    Fallback, official domains ONLY (2026-08-09, owner-directed -- explicitly
-    scoped to the brand's own site, not retailers): a `site:{domain}`-
-    restricted Google search. Google's general index is not filtered by the
-    storefront's own stock-aware search widget, so it very often still has
-    the exact product page. Every result is still fetched and put through
-    the SAME identity checks as every other source (model_matches_identity,
-    brand_matches_identity for a shared host) -- this widens WHERE a URL is
-    found, never what counts as proof once it's fetched.
+    Three fallbacks, tried in order, official domains ONLY (2026-08-09,
+    owner-directed -- explicitly scoped to the brand's own site, not
+    retailers; owner-requested to be "universal" across platforms rather
+    than WooCommerce-only, and to avoid depending on a Google key the owner
+    does not currently have):
+
+      1. WooCommerce's public Store API (_woocommerce_store_api_fallback) --
+         no key needed, directly queries the product data the "hide out of
+         stock" setting only hides from the THEME, not the data itself.
+      2. Shopify's public Predictive Search API
+         (_shopify_predictive_search_fallback) -- also no key needed. The
+         fix there is a single documented Shopify query parameter,
+         `resources[options][unavailable_products]=show`, which forces
+         sold-out products BACK INTO results that exclude them by default.
+      3. A `site:{domain}`-restricted Google search, IF configured (bonus
+         for any OTHER platform, e.g. Magento, custom-built; zero cost when
+         no key is set, which is the owner's current setup).
+
+    Cheap-to-expensive, no-key-first ordering: 1 and 2 are each a single
+    JSON request with no external dependency and no daily quota, so they're
+    tried before touching the optional, quota-limited Google tier. Every
+    candidate this finds still goes through the SAME identity checks as any
+    other source (model_matches_identity, brand_matches_identity for a
+    shared host) -- this only widens WHERE a URL/product can be found, never
+    what counts as proof once it's fetched.
 
     Returns a scraped_data-shaped dict on success, or None (never raises) --
     callers fall through to the existing bail-out/settle behaviour exactly
-    as before when this can't help (not configured, no result, nothing
-    validates).
+    as before when nothing here can help.
     """
+    def _identity_ok(candidate: dict[str, Any]) -> bool:
+        return not require_brand_identity or brand_matches_identity(
+            brand_name, candidate["url"], candidate["candidate_titles"]
+        )
+
+    # Sequential, not gathered: each is a short-circuit -- once one platform
+    # fallback finds the product, there's no reason to also query the other.
+    woo = await _woocommerce_store_api_fallback(domain, model_number)
+    if woo and _identity_ok(woo):
+        return woo
+
+    shopify = await _shopify_predictive_search_fallback(domain, model_number)
+    if shopify and _identity_ok(shopify):
+        return shopify
+
     if not google_search_client.configured:
         return None
 

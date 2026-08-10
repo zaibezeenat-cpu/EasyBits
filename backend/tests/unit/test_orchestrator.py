@@ -7,6 +7,7 @@ can name the model while every product on it is something else -- observed live,
 where a search for KLU-12B03S returned a page whose top hit was KGP-18C01S.
 Only a product DETAIL page that names the model is evidence.
 """
+import httpx
 import pytest
 
 from app.scraping import orchestrator
@@ -481,3 +482,248 @@ async def test_out_of_stock_fallback_is_a_noop_when_google_search_not_configured
 
     assert "failure" in result
     assert result["failure"].category == "source_unreachable"
+
+
+# --- WooCommerce Store API fallback (no key needed) -------------------------
+
+class _FakeResponse:
+    def __init__(self, status_code: int, payload):
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class _FakeHttpxClient:
+    def __init__(self, response: "_FakeResponse", *, raises: Exception | None = None):
+        self._response = response
+        self._raises = raises
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, **kwargs):
+        if self._raises:
+            raise self._raises
+        return self._response
+
+
+@pytest.mark.asyncio
+async def test_woocommerce_store_api_finds_an_out_of_stock_product(monkeypatch):
+    """
+    No key needed, works today. The Store API returns the product with
+    is_in_stock=False -- WooCommerce's "hide out of stock" setting only
+    affects the theme's own search/catalog templates, not this endpoint.
+    """
+    payload = [{
+        "name": "Anex AG-01 Handy Pull Chopper",
+        "sku": "AG-01",
+        "permalink": "https://anex.pk/product/ag-01/",
+        "short_description": "<p>Manual food chopper.</p>",
+        "description": "<p>Easy to use. Chops onion, tomato.</p>",
+        "is_in_stock": False,
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    result = await orchestrator._woocommerce_store_api_fallback("anex.pk", "AG-01")
+
+    assert result is not None
+    assert result["source_type"] == "official"
+    assert result["url"] == "https://anex.pk/product/ag-01/"
+    assert "Manual food chopper" in result["content"]
+    assert "<p>" not in result["content"], "HTML must be stripped, not passed through raw"
+
+
+@pytest.mark.asyncio
+async def test_woocommerce_store_api_returns_none_for_a_non_matching_product(monkeypatch):
+    payload = [{
+        "name": "Anex AG-99 Different Chopper", "sku": "AG-99",
+        "permalink": "https://anex.pk/product/ag-99/",
+        "short_description": "", "description": "", "is_in_stock": True,
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    result = await orchestrator._woocommerce_store_api_fallback("anex.pk", "AG-01")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_woocommerce_store_api_fails_gracefully_on_non_woocommerce_site(monkeypatch):
+    """A site that isn't WooCommerce (404, or not JSON, or network error) must
+    fail silently -- never raise, never break the surrounding discovery loop."""
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(404, {})),
+    )
+    assert await orchestrator._woocommerce_store_api_fallback("shopify-store.pk", "AG-01") is None
+
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(None, raises=httpx.ConnectError("boom")),
+    )
+    assert await orchestrator._woocommerce_store_api_fallback("dead-site.pk", "AG-01") is None
+
+
+@pytest.mark.asyncio
+async def test_official_fallback_tries_woocommerce_before_google(
+    one_official_source, monkeypatch
+):
+    """WooCommerce (no key) must be tried BEFORE Google (needs a key) -- if
+    WooCommerce already found it, Google must never even be called."""
+    payload = [{
+        "name": "Anex AG-01 Handy Pull Chopper", "sku": "AG-01",
+        "permalink": "https://brand.pk/product/ag-01/",
+        "short_description": "Manual chopper.", "description": "",
+        "is_in_stock": False,
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    google_called = False
+
+    async def fake_search(query):
+        nonlocal google_called
+        google_called = True
+        return []
+
+    monkeypatch.setattr(orchestrator.google_search_client, "api_key", "k")
+    monkeypatch.setattr(orchestrator.google_search_client, "cx", "c")
+    monkeypatch.setattr(orchestrator.google_search_client, "search", fake_search)
+
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "Anex Pakistan -- browse our full range.")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" not in result
+    assert result["scraped_data"][0]["url"] == "https://brand.pk/product/ag-01/"
+    assert not google_called, "Google must not be called once WooCommerce already found it"
+
+
+# --- Shopify predictive search fallback (no key needed) ---------------------
+
+@pytest.mark.asyncio
+async def test_shopify_predictive_search_finds_an_out_of_stock_product(monkeypatch):
+    """
+    The fix is the `unavailable_products=show` query parameter -- without
+    it, Shopify's predictive search excludes sold-out products by default,
+    same blind spot as the theme's visible search box.
+    """
+    payload = {
+        "resources": {"results": {"products": [{
+            "title": "Anex AG-01 Handy Pull Chopper",
+            "handle": "anex-ag-01-handy-pull-chopper",
+            "url": "/products/anex-ag-01-handy-pull-chopper",
+            "body": "<p>Manual food chopper. Chops onion, tomato.</p>",
+            "available": False,
+        }]}}
+    }
+    captured_url = {}
+
+    class _CapturingClient(_FakeHttpxClient):
+        async def get(self, url, **kwargs):
+            captured_url["url"] = url
+            return await super().get(url, **kwargs)
+
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _CapturingClient(_FakeResponse(200, payload)),
+    )
+
+    result = await orchestrator._shopify_predictive_search_fallback("brandstore.pk", "AG-01")
+
+    assert result is not None
+    assert result["source_type"] == "official"
+    assert result["url"] == "https://brandstore.pk/products/anex-ag-01-handy-pull-chopper"
+    assert "Manual food chopper" in result["content"]
+    assert "[unavailable_products]=show" in captured_url["url"], (
+        "the documented Shopify parameter that includes sold-out products must be sent"
+    )
+
+
+@pytest.mark.asyncio
+async def test_shopify_predictive_search_returns_none_for_a_non_matching_product(monkeypatch):
+    payload = {"resources": {"results": {"products": [{
+        "title": "Anex AG-99 Different Chopper", "handle": "ag-99",
+        "url": "/products/ag-99", "body": "", "available": True,
+    }]}}}
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    result = await orchestrator._shopify_predictive_search_fallback("brandstore.pk", "AG-01")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_shopify_predictive_search_fails_gracefully_on_non_shopify_site(monkeypatch):
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(404, {})),
+    )
+    assert await orchestrator._shopify_predictive_search_fallback("woo-store.pk", "AG-01") is None
+
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(None, raises=httpx.ConnectError("boom")),
+    )
+    assert await orchestrator._shopify_predictive_search_fallback("dead-site.pk", "AG-01") is None
+
+
+@pytest.mark.asyncio
+async def test_official_fallback_tries_shopify_when_woocommerce_finds_nothing(
+    one_official_source, monkeypatch
+):
+    """WooCommerce endpoint 404s (not a WooCommerce site) -> falls through to
+    Shopify, which finds it -- proving the two-platform chain actually
+    chains, not just tries the first and gives up."""
+    call_urls = []
+
+    async def routed_get(self, url, **kwargs):
+        call_urls.append(url)
+        if "wp-json/wc/store" in url:
+            return _FakeResponse(404, {})
+        return _FakeResponse(200, {"resources": {"results": {"products": [{
+            "title": "Anex AG-01 Handy Pull Chopper", "handle": "ag-01",
+            "url": "/products/ag-01", "body": "Manual chopper.", "available": False,
+        }]}}})
+
+    class _RoutingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        get = routed_get
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda **kw: _RoutingClient())
+
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "Anex Pakistan -- browse our full range.")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+    monkeypatch.setattr(orchestrator.google_search_client, "api_key", None)
+    monkeypatch.setattr(orchestrator.google_search_client, "cx", None)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" not in result
+    assert result["scraped_data"][0]["url"] == "https://brand.pk/products/ag-01"
+    assert any("wp-json/wc/store" in u for u in call_urls), "WooCommerce must be tried first"
+    assert any("search/suggest.json" in u for u in call_urls), "Shopify must be tried after WooCommerce fails"
