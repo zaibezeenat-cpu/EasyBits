@@ -87,19 +87,6 @@ def _brand_identity_ok(
     every call site checks model_matches_identity (or an equivalent, like the
     platform APIs' own search-match) BEFORE this ever runs.
 
-    2026-08-10 (owner-directed, live): "model number match kar gaye kafi hai
-    ... bohot kam log brand mention karte hain ... yehi main karta hoon, yehi
-    mey chahta hoon." A trusted_secondary retailer (the owner's own curated
-    list -- Settings -> Trusted Secondary Sources) routinely copies the
-    manufacturer's own title verbatim, which very often omits the brand name
-    entirely -- the real reported case is Anex's own official title for
-    AG-10, which never says "Anex" either. For trusted_secondary specifically,
-    a strict model-number match is accepted even when the title/URL never
-    names the brand: this is the NORMAL case in this business, not the
-    exception, and the pre-existing corroboration safety net (trusted_secondary
-    is never authoritative alone -- see _corroboration_satisfied) already
-    bounds the residual risk of a genuinely wrong-brand page slipping in.
-
     official and web are UNCHANGED and stay strict: official is the one tier
     trusted alone, so a wrong brand there is a real problem, and web is
     unvetted by definition -- neither gets this softening.
@@ -642,7 +629,7 @@ async def scrape_product(
     for source in sources:
         by_domain.setdefault(source.get("domain") or source["url"], []).append(source)
 
-    scraped_data: list[dict[str, str]] = []
+    scraped_data: list[dict[str, Any]] = []
     # Tracks whether any source served an anti-bot / CAPTCHA challenge rather than
     # a real page. If nothing usable is scraped AND a block was seen, the operator
     # is told to paste Details -- the actionable truth -- instead of the misleading
