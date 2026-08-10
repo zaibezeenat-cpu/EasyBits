@@ -367,3 +367,117 @@ async def test_a_domain_that_delivered_is_not_rescraped_in_pass_2(monkeypatch, _
 
     assert not any("good.pk" in u and tier2 for u, tier2 in seen), \
         "re-scraped a domain that had already delivered"
+
+
+# --- Out-of-stock on the official site (2026-08-09, owner-reported) --------
+
+@pytest.fixture
+def one_official_source(monkeypatch):
+    async def sources(_brand, _model, **_kw):
+        return [{"url": "https://brand.pk/search?q=x", "source_type": "official",
+                 "domain": "brand.pk"}]
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(orchestrator, "resolve_sources", sources)
+    monkeypatch.setattr(orchestrator, "remember_working_template", noop)
+
+
+@pytest.mark.asyncio
+async def test_official_out_of_stock_product_is_found_via_google_site_search(
+    one_official_source, monkeypatch
+):
+    """
+    THE OWNER-REPORTED BUG: a product genuinely live on the brand's official
+    site was not found. Root cause: the site's own on-site search excludes
+    out-of-stock items, so the search page mentions the brand ("Anex") but
+    never the model -- and the existing bail-out logic reads that as proof
+    the domain doesn't stock it. The Google site-search fallback must catch
+    this for an OFFICIAL domain and still find the product.
+    """
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        if url == "https://brand.pk/search?q=x":
+            # Search widget: brand appears (nav/header), model does not --
+            # the out-of-stock filtering signature.
+            return _result(url, "Anex Pakistan -- browse our full range.")
+        if url == "https://brand.pk/products/ag-01":
+            # The real, direct product page Google still has indexed.
+            return _result(url, "Anex AG-01 Handy Pull Chopper. Out of stock.")
+        raise AssertionError(f"unexpected fetch: {url}")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+    monkeypatch.setattr(orchestrator.google_search_client, "api_key", "k")
+    monkeypatch.setattr(orchestrator.google_search_client, "cx", "c")
+
+    async def fake_search(query):
+        assert "site:brand.pk" in query
+        assert "AG-01" in query
+        return ["https://brand.pk/products/ag-01"]
+
+    monkeypatch.setattr(orchestrator.google_search_client, "search", fake_search)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" not in result
+    assert len(result["scraped_data"]) == 1
+    assert result["scraped_data"][0]["source_type"] == "official"
+    assert "AG-01" in result["scraped_data"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_retailer_domain_does_not_get_the_out_of_stock_fallback(monkeypatch):
+    """
+    Scoped to official domains ONLY (owner-directed): the same "brand
+    appears, model doesn't" situation on a TRUSTED_SECONDARY (retailer)
+    domain must NOT trigger the Google fallback -- it should fail exactly
+    as before this change.
+    """
+    async def sources(_brand, _model, **_kw):
+        return [{"url": "https://retailer.pk/search?q=x", "source_type": "trusted_secondary",
+                 "domain": "retailer.pk"}]
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(orchestrator, "resolve_sources", sources)
+    monkeypatch.setattr(orchestrator, "remember_working_template", noop)
+
+    search_called = False
+
+    async def fake_search(query):
+        nonlocal search_called
+        search_called = True
+        return ["https://retailer.pk/products/ag-01"]
+
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "Anex Pakistan -- browse our full range.")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+    monkeypatch.setattr(orchestrator.google_search_client, "api_key", "k")
+    monkeypatch.setattr(orchestrator.google_search_client, "cx", "c")
+    monkeypatch.setattr(orchestrator.google_search_client, "search", fake_search)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" in result
+    assert not search_called, "the out-of-stock fallback must never fire for a non-official domain"
+
+
+@pytest.mark.asyncio
+async def test_out_of_stock_fallback_is_a_noop_when_google_search_not_configured(
+    one_official_source, monkeypatch
+):
+    """Optional by design, same as every other Google-search use in this
+    codebase: with no key configured, discovery behaves exactly as before."""
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "Anex Pakistan -- browse our full range.")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+    monkeypatch.setattr(orchestrator.google_search_client, "api_key", None)
+    monkeypatch.setattr(orchestrator.google_search_client, "cx", None)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" in result
+    assert result["failure"].category == "source_unreachable"

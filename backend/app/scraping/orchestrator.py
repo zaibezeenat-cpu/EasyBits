@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from app.core.config import settings
 from app.models.failure import FailureInfo
 from app.scraping.fetcher import smart_fetch
+from app.scraping.google_search_client import google_search_client
 from app.scraping.playwright_client import is_block_page
 from app.scraping.source_discovery import (
     brand_matches_identity,
@@ -146,6 +147,73 @@ async def _follow_to_detail_page(search_result, model_number: str,
             continue
         logger.info(f"Followed search result to detail page: {link}")
         return detail
+    return None
+
+
+async def _official_out_of_stock_fallback(
+    domain: str, model_number: str, brand_name: str, require_brand_identity: bool
+) -> dict[str, Any] | None:
+    """
+    Owner-reported: a product genuinely on the brand's OFFICIAL site was not
+    being found. Root cause: many storefront platforms (Shopify, WooCommerce,
+    Magento defaults) exclude out-of-stock items from their OWN on-site
+    search results -- so a real, live product page returns nothing from
+    every search URL pattern tried, and the existing bail-out logic above
+    reads "search works (brand appears), model doesn't" as proof the domain
+    does not stock it. For an out-of-stock item that inference is wrong: the
+    page exists, it just isn't in the search index.
+
+    Fallback, official domains ONLY (2026-08-09, owner-directed -- explicitly
+    scoped to the brand's own site, not retailers): a `site:{domain}`-
+    restricted Google search. Google's general index is not filtered by the
+    storefront's own stock-aware search widget, so it very often still has
+    the exact product page. Every result is still fetched and put through
+    the SAME identity checks as every other source (model_matches_identity,
+    brand_matches_identity for a shared host) -- this widens WHERE a URL is
+    found, never what counts as proof once it's fetched.
+
+    Returns a scraped_data-shaped dict on success, or None (never raises) --
+    callers fall through to the existing bail-out/settle behaviour exactly
+    as before when this can't help (not configured, no result, nothing
+    validates).
+    """
+    if not google_search_client.configured:
+        return None
+
+    query = f"site:{domain} {brand_name} {model_number}".strip()
+    try:
+        urls = await google_search_client.search(query)
+    except Exception as e:
+        logger.warning(f"Official-site out-of-stock fallback search failed for {domain}: {e}")
+        return None
+
+    for url in urls[:3]:
+        try:
+            result = await smart_fetch(url, model_number, allow_tier2=True)
+        except Exception as e:
+            logger.warning(f"Could not fetch out-of-stock fallback candidate {url}: {e}")
+            continue
+        if not (result.success and result.content
+                and search_result_mentions_product(result.content, model_number)):
+            continue
+        if not model_matches_identity(model_number, result.url or url, result.candidate_titles):
+            continue
+        if require_brand_identity and not brand_matches_identity(
+            brand_name, result.url or url, result.candidate_titles
+        ):
+            continue
+
+        logger.info(
+            f"Found {brand_name} {model_number} on {domain} via Google site-search "
+            f"after the site's own search excluded it (likely out of stock): {url}"
+        )
+        return {
+            "url": result.url or url,
+            "source_type": "official",
+            "content": result.content,
+            "candidate_titles": list(result.candidate_titles),
+        }
+
     return None
 
 
@@ -316,6 +384,25 @@ async def scrape_product(
                             f"Skipping {len(candidates) - candidates.index(source) - 1} "
                             f"remaining URL pattern(s) for this domain."
                         )
+                        # 2026-08-09 (owner-directed, official domains only): before
+                        # accepting "search says not stocked" as final, try the
+                        # out-of-stock fallback -- see _official_out_of_stock_fallback's
+                        # docstring for why the site's OWN search is not reliable proof
+                        # of absence for an out-of-stock item. Only worth the extra
+                        # Google call once a browser has actually rendered the page
+                        # (allow_tier2), same "final ONLY when rendered" rule as below.
+                        if allow_tier2 and source["source_type"] == "official":
+                            fallback = await _official_out_of_stock_fallback(
+                                domain, model_number, brand_name,
+                                require_brand_identity=bool(source.get("scope_path")),
+                            )
+                            if fallback:
+                                scraped_data.append(fallback)
+                                matched = template_of_url(domain, source["url"], brand_name, model_number)
+                                if matched:
+                                    await remember_working_template(domain, matched)
+                                settled_domains.add(domain)
+                                break
                         # Final ONLY when a browser rendered the page. In pass 1 the
                         # brand can appear in an unrendered shell's nav menu while the
                         # catalogue never loaded, so this is not yet proof of anything
@@ -377,6 +464,20 @@ async def scrape_product(
                             f"Search page on {domain} confirmed working (mentions '{brand_token}') "
                             f"but '{model_number}' detail page not found. Bailing out of remaining candidate patterns."
                         )
+                        # Same out-of-stock fallback as the other bail-out above --
+                        # see _official_out_of_stock_fallback's docstring.
+                        if allow_tier2 and source["source_type"] == "official":
+                            fallback = await _official_out_of_stock_fallback(
+                                domain, model_number, brand_name,
+                                require_brand_identity=bool(source.get("scope_path")),
+                            )
+                            if fallback:
+                                scraped_data.append(fallback)
+                                matched = template_of_url(domain, source["url"], brand_name, model_number)
+                                if matched:
+                                    await remember_working_template(domain, matched)
+                                settled_domains.add(domain)
+                                break
                         # Same rule as the bail-out above: only a rendered page
                         # settles a domain. Without this guard, a pass-1 shell that
                         # merely lists brand names in its nav retires the domain
