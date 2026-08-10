@@ -21,6 +21,31 @@ def _result(url: str, content: str, links=None) -> ScrapeResult:
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_network_for_the_fast_path(monkeypatch):
+    """
+    2026-08-10: the platform fast path (_platform_fast_json_lookup) now
+    runs for EVERY official/trusted_secondary domain, not just official --
+    so every test in this file that doesn't care about it would otherwise
+    make 2 REAL (sandbox-blocked) network attempts per domain. Autouse so
+    every test gets an instant, harmless "not this platform" by default;
+    tests that actually exercise the fast path override this with their
+    own httpx.AsyncClient mock, which simply replaces this one for that
+    test.
+    """
+    class _InstantMiss:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, **kwargs):
+            raise httpx.ConnectError("no real network in tests")
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda **kw: _InstantMiss())
+
+
 @pytest.fixture
 def one_source(monkeypatch):
     async def sources(_brand, _model, **_kw):
@@ -996,9 +1021,15 @@ async def test_fast_path_miss_falls_through_to_the_normal_cascade(
 
 
 @pytest.mark.asyncio
-async def test_fast_path_is_never_tried_for_a_retailer_domain(monkeypatch):
-    """Scoped to official domains only -- a retailer must go straight to the
-    normal search cascade, never touching httpx.AsyncClient at all."""
+async def test_fast_path_now_runs_for_retailer_domains_too(monkeypatch):
+    """
+    2026-08-10 (owner-directed follow-up): extended from official-only to
+    EVERY domain, including trusted_secondary retailers (Surmawala, Japan
+    Electronics, Bismillah, Modern Electronics, etc.) -- no per-retailer
+    platform configuration needed, both cheap JSON lookups are just tried
+    for any domain and whichever matches (or neither) is discovered
+    automatically.
+    """
     async def sources(_brand, _model, **_kw):
         return [{"url": "https://retailer.pk/search?q=x", "source_type": "trusted_secondary",
                  "domain": "retailer.pk"}]
@@ -1009,14 +1040,49 @@ async def test_fast_path_is_never_tried_for_a_retailer_domain(monkeypatch):
     monkeypatch.setattr(orchestrator, "resolve_sources", sources)
     monkeypatch.setattr(orchestrator, "remember_working_template", noop)
 
-    httpx_called = False
+    payload = [{
+        "name": "Anex AG-01 Handy Pull Chopper", "sku": "AG-01",
+        "permalink": "https://retailer.pk/product/ag-01/",
+        "short_description": "Manual chopper.", "description": "", "is_in_stock": True,
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
 
-    def fail_if_called(**kw):
-        nonlocal httpx_called
-        httpx_called = True
-        raise AssertionError("httpx must not be touched for a retailer domain")
+    smart_fetch_called = False
 
-    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", fail_if_called)
+    async def fail_if_called(*args, **kwargs):
+        nonlocal smart_fetch_called
+        smart_fetch_called = True
+        raise AssertionError("smart_fetch must not be needed when the fast path hits a retailer too")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fail_if_called)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" not in result
+    assert not smart_fetch_called
+    # A retailer found via the fast path must stay labelled trusted_secondary
+    # -- the fetch MECHANISM never upgrades a source's trust tier.
+    assert result["scraped_data"][0]["source_type"] == "trusted_secondary"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_miss_on_a_retailer_falls_through_to_the_normal_cascade(monkeypatch):
+    """When the fast path finds nothing on a retailer domain, the existing
+    search-pattern cascade must still run exactly as before."""
+    async def sources(_brand, _model, **_kw):
+        return [{"url": "https://retailer.pk/search?q=x", "source_type": "trusted_secondary",
+                 "domain": "retailer.pk"}]
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(orchestrator, "resolve_sources", sources)
+    monkeypatch.setattr(orchestrator, "remember_working_template", noop)
+    # Autouse _no_real_network_for_the_fast_path already makes the fast path
+    # miss instantly here -- no override needed.
 
     async def fake_scrape(url, model_number="", allow_tier2=True):
         if "/products/" in url:
@@ -1029,4 +1095,5 @@ async def test_fast_path_is_never_tried_for_a_retailer_domain(monkeypatch):
     result = await orchestrator.scrape_product("Anex", "AG-01")
 
     assert "failure" not in result
-    assert not httpx_called
+    assert result["scraped_data"][0]["url"] == "https://retailer.pk/products/anex-ag-01"
+    assert result["scraped_data"][0]["source_type"] == "trusted_secondary"
