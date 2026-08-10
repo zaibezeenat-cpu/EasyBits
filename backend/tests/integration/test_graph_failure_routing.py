@@ -111,6 +111,7 @@ async def _run_with_writer_failure() -> dict:
         return _extraction()
 
     with (
+        patch("app.graph.nodes.brands_repo.get_by_name_ci", AsyncMock(return_value=BRAND)),
         patch("app.graph.nodes.brands_repo.get_by_name", AsyncMock(return_value=BRAND)),
         patch("app.graph.nodes.categories_repo.get_by_name", AsyncMock(return_value=CATEGORY)),
         patch("app.graph.nodes.categories_repo.get", AsyncMock(return_value=PARENT)),
@@ -275,6 +276,7 @@ async def test_a_failure_on_a_writer_RETRY_does_not_ship_the_previous_attempt():
         )}
 
     with (
+        patch("app.graph.nodes.brands_repo.get_by_name_ci", AsyncMock(return_value=BRAND)),
         patch("app.graph.nodes.brands_repo.get_by_name", AsyncMock(return_value=BRAND)),
         patch("app.graph.nodes.categories_repo.get_by_name", AsyncMock(return_value=CATEGORY)),
         patch("app.graph.nodes.categories_repo.get", AsyncMock(return_value=PARENT)),
@@ -346,6 +348,7 @@ async def test_a_colliding_sku_never_gets_a_csv_row_built():
         return await real_assembler(state)
 
     with (
+        patch("app.graph.nodes.brands_repo.get_by_name_ci", AsyncMock(return_value=BRAND)),
         patch("app.graph.nodes.brands_repo.get_by_name", AsyncMock(return_value=BRAND)),
         patch("app.graph.nodes.categories_repo.get_by_name", AsyncMock(return_value=CATEGORY)),
         patch("app.graph.nodes.categories_repo.get", AsyncMock(return_value=PARENT)),

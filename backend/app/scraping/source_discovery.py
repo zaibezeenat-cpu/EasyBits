@@ -146,12 +146,30 @@ def model_matches_identity(model_number: str, url: str, titles: list[str]) -> bo
     return bool(distinctive) and all(t in identity for t in distinctive)
 
 
+# Subdomain labels that carry no brand meaning of their own (a plain
+# storefront prefix, not a second word) -- dropped before tokenising the
+# hostname so "www"/"store" never appear in `candidates` as noise. Harmless
+# either way against the subset check below (an extra unrelated token can
+# never cause a false MATCH, only a false miss is a risk), but keeping the
+# candidate set clean matches what a human would actually read as "the
+# domain name".
+_GENERIC_HOST_PREFIXES = {"www", "store", "shop", "m"}
+
+
+def _hostname_tokens(url: str) -> set[str]:
+    netloc = (urlparse(url or "").netloc or "").split(":")[0]  # drop a port, if any
+    labels = [label for label in netloc.split(".") if label]
+    if labels and labels[0].lower() in _GENERIC_HOST_PREFIXES:
+        labels = labels[1:]
+    return _identity_tokens(".".join(labels))
+
+
 def brand_matches_identity(brand_name: str, url: str, titles: list[str]) -> bool:
     """
     True when a product page identifies itself as belonging to `brand_name`.
 
-    Checks ONLY the page's identity fields -- its URL slug and its titles --
-    never the body. THIS DISTINCTION IS THE WHOLE POINT, and it was measured
+    Checks the page's identity fields -- its hostname, URL slug, and titles --
+    never the body. THE BODY EXCLUSION IS THE WHOLE POINT, and it was measured
     rather than assumed. On dwphome.pk, which sells both brands, the body of a
     single EcoStar product page mentions "ecostar" 75 times and "gree" 47 times
     (site-wide navigation links every brand). A body-text check therefore passes
@@ -159,6 +177,18 @@ def brand_matches_identity(brand_name: str, url: str, titles: list[str]) -> bool
     same pages:
         EcoStar product -> "EcoStar Ario MAX Series 1 TON Split AC"
         Gree product    -> "GREE Airy Pro 1 TON Split AC (Inverter) - GS-12AITH24S-T3"
+
+    2026-08-10 (owner-reported, live): the hostname itself is now a candidate
+    too, not just the path. A dedicated single-brand domain's own product
+    titles do not always repeat the brand name (real case: anex.pk's own
+    title for AG-10 is just "AG-10 Handy Chopper With 10 Functions" -- no
+    "Anex" anywhere in the title OR the URL slug), so relying on path+title
+    alone rejected a page that was unambiguously genuine. The domain name is
+    exactly the signal that was missing: anex.pk's hostname trivially proves
+    Anex, and a genuinely shared host's hostname (dwphome.pk) proves neither
+    brand -- so this adds a real signal without reopening the EcoStar/Gree
+    hole the body-exclusion above exists to prevent (see
+    test_hostname_does_not_rescue_a_genuinely_wrong_brand).
 
     Token matching, not substring: "gree" is a substring of "degree" and
     "agree", so a substring test would match unrelated marketing copy.
@@ -168,6 +198,7 @@ def brand_matches_identity(brand_name: str, url: str, titles: list[str]) -> bool
         return False
 
     candidates = _identity_tokens(urlparse(url or "").path)
+    candidates |= _hostname_tokens(url)
     for title in titles or []:
         candidates |= _identity_tokens(title)
 

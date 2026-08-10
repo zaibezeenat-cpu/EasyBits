@@ -77,7 +77,7 @@ async def test_unknown_brand_escalates_and_never_invents_one(monkeypatch):
     # Mock BOTH lookups: intake_triage resolves the category before the brand
     # check, so leaving categories_repo live would hit the real DB (and fail in
     # CI). The assertion is purely about the unknown brand.
-    monkeypatch.setattr(nodes.brands_repo, "get_by_name", no_brand)
+    monkeypatch.setattr(nodes.brands_repo, "get_by_name_ci", no_brand)
     monkeypatch.setattr(nodes.categories_repo, "get_by_name", no_brand)
     result = await nodes.intake_triage(_state())
     assert result["manual_review_required"] is True
@@ -88,7 +88,9 @@ async def test_unknown_brand_escalates_and_never_invents_one(monkeypatch):
 async def test_brand_casing_mismatch_is_rejected(monkeypatch):
     """
     "kenwood" vs stored "Kenwood" must not silently pass: the CSV Brands value
-    has to be byte-identical to the live taxonomy.
+    has to be byte-identical to the live taxonomy. The brand is still FOUND
+    (get_by_name_ci matches case-insensitively -- see the dedicated test
+    below), but the exact-casing lock rejects it afterward regardless.
     """
     class _Brand:
         id, name = uuid4(), "Kenwood"
@@ -102,11 +104,47 @@ async def test_brand_casing_mismatch_is_rejected(monkeypatch):
     async def cat(_n):
         return _Cat()
 
-    monkeypatch.setattr(nodes.brands_repo, "get_by_name", brand)
+    monkeypatch.setattr(nodes.brands_repo, "get_by_name_ci", brand)
     monkeypatch.setattr(nodes.categories_repo, "get_by_name", cat)
 
     result = await nodes.intake_triage(_state(raw_input=_raw_input(brand_name="kenwood")))
     assert result["failure"].category == "brand_casing_mismatch"
+    assert "Kenwood" in result["failure"].detail
+
+
+@pytest.mark.asyncio
+async def test_brand_found_case_insensitively_is_still_correctly_rejected_for_casing(monkeypatch):
+    """
+    2026-08-10 (owner-reported, live): before this fix, intake_triage called
+    the STRICT get_by_name(), so "anex" (typed) against a taxonomy row
+    "Anex" reported missing_taxonomy_match ("Brand anex not found in DB") --
+    reads as the brand not existing, when it plainly does. Switching intake
+    to get_by_name_ci() means the brand is now FOUND -- and the pre-existing
+    casing lock still catches the real difference and reports it as the
+    specific, actionable brand_casing_mismatch instead of a dead end.
+    """
+    class _Brand:
+        id, name = uuid4(), "Anex"
+
+    class _Cat:
+        id, name, parent_id = uuid4(), "Air conditioner", None
+
+    async def brand_ci(typed):
+        # Mirrors the real get_by_name_ci contract: found regardless of case.
+        return _Brand() if typed.strip().lower() == "anex" else None
+
+    async def cat(_n):
+        return _Cat()
+
+    monkeypatch.setattr(nodes.brands_repo, "get_by_name_ci", brand_ci)
+    monkeypatch.setattr(nodes.categories_repo, "get_by_name", cat)
+
+    result = await nodes.intake_triage(_state(raw_input=_raw_input(brand_name="anex")))
+    assert result["failure"].category == "brand_casing_mismatch", (
+        "must be FOUND (not missing_taxonomy_match) and then rejected only "
+        "for its casing, with the correct taxonomy casing named"
+    )
+    assert "Anex" in result["failure"].detail
 
 
 @pytest.mark.asyncio
@@ -127,7 +165,7 @@ async def test_missing_category_schema_escalates(monkeypatch):
     async def no_schema(_id):
         return None
 
-    monkeypatch.setattr(nodes.brands_repo, "get_by_name", brand)
+    monkeypatch.setattr(nodes.brands_repo, "get_by_name_ci", brand)
     monkeypatch.setattr(nodes.categories_repo, "get_by_name", cat)
     monkeypatch.setattr(nodes.taxonomy_repo, "get_schema_by_category", no_schema)
 

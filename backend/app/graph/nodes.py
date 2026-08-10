@@ -76,7 +76,12 @@ async def intake_triage(state: PipelineState) -> dict[str, Any]:
     raw = state.raw_input
 
     # Resolve category schema
-    brand = await brands_repo.get_by_name(raw.brand_name)
+    # 2026-08-10 (owner-reported, live): case/whitespace-insensitive lookup --
+    # a strict exact match here reported a brand that genuinely exists as
+    # "not found in DB" over nothing more than casing or a stray space. The
+    # casing-lock check right below is unaffected and still enforces exact
+    # casing -- this only fixes FINDABILITY. See BrandsRepository.get_by_name_ci.
+    brand = await brands_repo.get_by_name_ci(raw.brand_name)
     category = await categories_repo.get_by_name(raw.category_name)
 
     if not brand:

@@ -82,6 +82,87 @@ async def test_brands_update_invalidates_the_cache(monkeypatch):
     assert execute.call_count == 2
 
 
+# --- Case/whitespace-insensitive brand lookup (2026-08-10, owner-reported) --
+#
+# Root cause of a recurring "brand not found in DB" false-positive: intake
+# used to call the strict get_by_name(), an exact `.eq("name", ...)` filter,
+# so a CSV/manual brand string that differs from the taxonomy's stored
+# casing OR carries stray whitespace (a common copy-paste artifact) reported
+# as "not found" even though the brand plainly exists. get_by_name_ci() is
+# for FINDABILITY only -- the caller (intake_triage) still enforces the
+# exact-casing Brand Casing Lock afterward by comparing the returned
+# Brand.name to the raw input, so a real casing difference still surfaces,
+# just as the more specific/actionable brand_casing_mismatch instead of a
+# dead-end "does not exist".
+
+
+@pytest.mark.asyncio
+async def test_get_by_name_ci_finds_a_brand_typed_in_a_different_case(monkeypatch):
+    repo = BrandsRepository()
+    query, execute = _fake_table([{
+        "id": "00000000-0000-0000-0000-000000000001", "name": "Anex",
+        "display_name": None, "casing_confirmed": True, "is_active": True,
+        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+    }])
+    db = MagicMock()
+    db.table.return_value = query
+    monkeypatch.setattr("app.db.repositories.base.get_supabase", AsyncMock(return_value=db))
+
+    brand = await repo.get_by_name_ci("anex")
+    assert brand is not None and brand.name == "Anex"
+
+
+@pytest.mark.asyncio
+async def test_get_by_name_ci_strips_stray_whitespace(monkeypatch):
+    """A trailing/leading space and doubled internal spaces are common CSV
+    copy-paste artifacts -- neither should prevent a real brand being found."""
+    repo = BrandsRepository()
+    query, execute = _fake_table([{
+        "id": "00000000-0000-0000-0000-000000000001", "name": "Super Asia",
+        "display_name": None, "casing_confirmed": True, "is_active": True,
+        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+    }])
+    db = MagicMock()
+    db.table.return_value = query
+    monkeypatch.setattr("app.db.repositories.base.get_supabase", AsyncMock(return_value=db))
+
+    assert (await repo.get_by_name_ci(" Super Asia ")).name == "Super Asia"
+    assert (await repo.get_by_name_ci("super  asia")).name == "Super Asia"
+
+
+@pytest.mark.asyncio
+async def test_get_by_name_ci_returns_none_for_a_brand_that_truly_does_not_exist(monkeypatch):
+    repo = BrandsRepository()
+    query, execute = _fake_table([{
+        "id": "00000000-0000-0000-0000-000000000001", "name": "Anex",
+        "display_name": None, "casing_confirmed": True, "is_active": True,
+        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+    }])
+    db = MagicMock()
+    db.table.return_value = query
+    monkeypatch.setattr("app.db.repositories.base.get_supabase", AsyncMock(return_value=db))
+
+    assert await repo.get_by_name_ci("Kenwood") is None
+    assert await repo.get_by_name_ci("") is None
+
+
+@pytest.mark.asyncio
+async def test_get_by_name_ci_hits_db_once_for_repeated_reads(monkeypatch):
+    repo = BrandsRepository()
+    query, execute = _fake_table([{
+        "id": "00000000-0000-0000-0000-000000000001", "name": "Anex",
+        "display_name": None, "casing_confirmed": True, "is_active": True,
+        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+    }])
+    db = MagicMock()
+    db.table.return_value = query
+    monkeypatch.setattr("app.db.repositories.base.get_supabase", AsyncMock(return_value=db))
+
+    for _ in range(4):
+        await repo.get_by_name_ci("anex")
+    assert execute.call_count == 1
+
+
 @pytest.mark.asyncio
 async def test_categories_get_by_id_hits_db_once_for_repeated_parent_lookups(monkeypatch):
     repo = CategoriesRepository()
