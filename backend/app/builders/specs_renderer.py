@@ -1,3 +1,5 @@
+import re
+
 from app.models.extraction import ExtractionResult
 from app.models.taxonomy import CategorySpecSchema
 
@@ -8,6 +10,37 @@ from app.models.taxonomy import CategorySpecSchema
 _ROW = "    <tr style='border-bottom: 1px solid #eaeaea'>"
 _TH = "text-align: left;padding: 8px 4px;color: #555555;font-weight: normal;vertical-align: top"
 _TD = "padding: 8px 4px;color: #555555;vertical-align: top"
+
+# A scraped bullet list ("Easy to use", "Manual Food Cutter", ...) often
+# arrives already flattened to one string by the HTML-to-text cleanup
+# upstream (BeautifulSoup's get_text() joins <li> siblings with no
+# separator), and the Extractor is required to copy facts verbatim rather
+# than rephrase them -- so a garbled "Easy to use.Manual Food
+# Cutter.Quickly chops...onion, tomato," reaches this renderer completely
+# unpunctuated. Owner-reported (real Anex AG-01 product). This is PURELY
+# typographic cleanup of how the value DISPLAYS -- it never touches the
+# stored citation value, so it is not "rewriting a fact": inserting a space
+# a human obviously meant to be there, and dropping a comma with nothing
+# after it, changes no word and asserts nothing new.
+#
+# Period is handled SEPARATELY from comma/semicolon/colon, and only fires
+# when a LETTER follows -- never a digit -- so a decimal spec value like
+# "9.5L" or "3.7V" is never touched (a digit-period-digit run must survive
+# untouched, or a real capacity turns into a visibly wrong number).
+# Comma/semicolon/colon carry no such risk in this codebase (decimals are
+# always written with '.', never ','), so those fire before any alnum.
+_MISSING_SPACE_AFTER_PERIOD = re.compile(r"\.(?=[A-Za-z])")
+_MISSING_SPACE_AFTER_COMMA_SEMI_COLON = re.compile(r"([,;:])(?=[A-Za-z0-9])")
+_DANGLING_TRAILING_PUNCTUATION = re.compile(r"[,;:]\s*$")
+
+
+def _tidy_spec_value(value: str) -> str:
+    """Cosmetic-only cleanup for display; see the module comment above."""
+    text = value.strip()
+    text = _MISSING_SPACE_AFTER_PERIOD.sub(". ", text)
+    text = _MISSING_SPACE_AFTER_COMMA_SEMI_COLON.sub(r"\1 ", text)
+    text = _DANGLING_TRAILING_PUNCTUATION.sub("", text).strip()
+    return text
 
 
 def render_specs_table(extraction: ExtractionResult, schema: CategorySpecSchema, warranty_phrase: str) -> str:
@@ -27,11 +60,13 @@ def render_specs_table(extraction: ExtractionResult, schema: CategorySpecSchema,
 
     for field in schema.fields:
         value = extraction.confirmed_value(field.key)
-        
+
         # Safe check for empty or unknown values to prevent them from printing
         if not value or str(value).strip().upper() == "UNKNOWN" or str(value).strip().upper() == "NOT AVAILABLE":
             continue
-            
+
+        value = _tidy_spec_value(str(value))
+
         html.append(_ROW)
         html.append(f"      <th style='{_TH}'>{field.label}</th>")
         html.append(f"      <td style='{_TD}'>{value}</td>")
