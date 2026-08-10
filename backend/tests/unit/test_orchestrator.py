@@ -727,3 +727,159 @@ async def test_official_fallback_tries_shopify_when_woocommerce_finds_nothing(
     assert result["scraped_data"][0]["url"] == "https://brand.pk/products/ag-01"
     assert any("wp-json/wc/store" in u for u in call_urls), "WooCommerce must be tried first"
     assert any("search/suggest.json" in u for u in call_urls), "Shopify must be tried after WooCommerce fails"
+
+
+# --- Shopify full-catalog scan (2026-08-10, owner's live test on anex.pk) ---
+#
+# The owner's own curl test against anex.pk showed predictive search --
+# even WITH unavailable_products=show -- did not return AG-10 (a real
+# out-of-stock product). /products/{handle}.json for the SAME product,
+# fetched directly, returned the full real product data. These tests use
+# a shape modelled on that real response (no "available" key on the
+# variant at all, per the owner's actual output) to prove the catalog scan
+# finds what predictive search missed.
+
+_ANEX_AG10_VARIANT_NO_AVAILABLE_KEY = {
+    # Mirrors the REAL anex.pk response shape the owner pasted: no
+    # "available" or "inventory_quantity" key present at all.
+    "id": 45705528049919, "product_id": 8741701386495, "title": "Default Title",
+    "price": "3300.00", "sku": None, "inventory_management": "shopify",
+}
+
+
+@pytest.mark.asyncio
+async def test_shopify_catalog_scan_finds_the_real_anex_ag10_shape(monkeypatch):
+    payload = {"products": [{
+        "title": "AG-10 Handy Chopper With 10 Functions",
+        "handle": "ag-10-handy-chopper-with-10-functions",
+        "body_html": "<p>A Power full chopper and grinder assisted with 4 disks for mincing</p>",
+        "variants": [_ANEX_AG10_VARIANT_NO_AVAILABLE_KEY],
+    }]}
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    result = await orchestrator._shopify_catalog_scan_fallback("anex.pk", "AG-10")
+
+    assert result is not None
+    assert result["url"] == "https://anex.pk/products/ag-10-handy-chopper-with-10-functions"
+    assert "Power full chopper" in result["content"]
+    assert "<p>" not in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_shopify_catalog_scan_paginates_when_the_product_is_on_page_2(monkeypatch):
+    """A store with more than 250 products must not stop after page 1."""
+    page_calls = []
+
+    async def routed_get(self, url, **kwargs):
+        page_calls.append(url)
+        if "page=1" in url:
+            # A full page (250 items) -- must try page 2.
+            filler = [{"title": f"Other Product {i}", "handle": f"other-{i}", "body_html": "", "variants": []}
+                      for i in range(250)]
+            return _FakeResponse(200, {"products": filler})
+        if "page=2" in url:
+            return _FakeResponse(200, {"products": [{
+                "title": "AG-10 Handy Chopper", "handle": "ag-10-handy-chopper",
+                "body_html": "Chopper.", "variants": [],
+            }]})
+        return _FakeResponse(200, {"products": []})
+
+    class _RoutingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        get = routed_get
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda **kw: _RoutingClient())
+
+    result = await orchestrator._shopify_catalog_scan_fallback("anex.pk", "AG-10")
+
+    assert result is not None
+    assert "ag-10-handy-chopper" in result["url"]
+    assert any("page=2" in u for u in page_calls), "must have paginated to page 2"
+
+
+@pytest.mark.asyncio
+async def test_shopify_catalog_scan_stops_after_max_pages(monkeypatch):
+    """Bounded cost: must not scan forever on a huge or misbehaving catalogue."""
+    call_count = 0
+
+    async def routed_get(self, url, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        filler = [{"title": f"Other {i}", "handle": f"other-{i}", "body_html": "", "variants": []}
+                  for i in range(250)]
+        return _FakeResponse(200, {"products": filler})
+
+    class _RoutingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        get = routed_get
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda **kw: _RoutingClient())
+
+    result = await orchestrator._shopify_catalog_scan_fallback("huge-store.pk", "NEVER-THERE")
+
+    assert result is None
+    assert call_count == orchestrator._SHOPIFY_CATALOG_MAX_PAGES
+
+
+@pytest.mark.asyncio
+async def test_official_fallback_tries_catalog_scan_when_predictive_search_misses(
+    one_official_source, monkeypatch
+):
+    """
+    THE EXACT OWNER-REPORTED SEQUENCE: WooCommerce isn't this platform,
+    predictive search returns nothing for this product (as the owner's live
+    test showed), catalog scan finds it.
+    """
+    call_urls = []
+
+    async def routed_get(self, url, **kwargs):
+        call_urls.append(url)
+        if "wp-json/wc/store" in url:
+            return _FakeResponse(404, {})
+        if "search/suggest.json" in url:
+            return _FakeResponse(200, {"resources": {"results": {"products": []}}})
+        if "products.json" in url:
+            return _FakeResponse(200, {"products": [{
+                "title": "AG-10 Handy Chopper With 10 Functions",
+                "handle": "ag-10-handy-chopper-with-10-functions",
+                "body_html": "A power full chopper and grinder.",
+                "variants": [_ANEX_AG10_VARIANT_NO_AVAILABLE_KEY],
+            }]})
+        return _FakeResponse(404, {})
+
+    class _RoutingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        get = routed_get
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda **kw: _RoutingClient())
+
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "Anex Pakistan -- browse our full range.")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+    monkeypatch.setattr(orchestrator.google_search_client, "api_key", None)
+    monkeypatch.setattr(orchestrator.google_search_client, "cx", None)
+
+    result = await orchestrator.scrape_product("Anex", "AG-10")
+
+    assert "failure" not in result
+    assert "ag-10-handy-chopper-with-10-functions" in result["scraped_data"][0]["url"]
+    assert any("products.json" in u for u in call_urls), "catalog scan must have been tried"

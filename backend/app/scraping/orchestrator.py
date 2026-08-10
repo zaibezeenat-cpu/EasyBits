@@ -305,6 +305,100 @@ async def _shopify_predictive_search_fallback(
     return None
 
 
+# Shopify's max page size for this legacy-but-still-live endpoint.
+_SHOPIFY_CATALOG_PAGE_LIMIT = 250
+# Bounds cost: up to 4 x 250 = 1000 products scanned before giving up. A
+# store bigger than that is rare for this catalogue, and this only runs at
+# all once search has already failed for an official domain.
+_SHOPIFY_CATALOG_MAX_PAGES = 4
+
+
+async def _shopify_catalog_scan_fallback(
+    domain: str, model_number: str
+) -> dict[str, Any] | None:
+    """
+    Shopify's full catalog listing endpoint (/products.json) -- no key, no
+    auth, the same public data source as the single-product .json endpoint
+    (verified live, 2026-08-10: anex.pk/products/{handle}.json returned the
+    complete product correctly for a real out-of-stock item).
+
+    WHY THIS EXISTS ALONGSIDE PREDICTIVE SEARCH, NOT INSTEAD OF IT: the
+    owner's live test on anex.pk showed predictive search
+    (_shopify_predictive_search_fallback), even WITH
+    unavailable_products=show, did not return this specific product --
+    Shopify's predictive search index can lag or exclude items for reasons
+    beyond stock status alone. /products.json is the store's actual full
+    catalogue, unfiltered by any search index, so it is the more reliable
+    (if slightly more expensive -- paginated, up to 1000 products scanned)
+    way to find a product a search-based approach missed.
+
+    Tried AFTER predictive search (cheaper, usually sufficient) and only
+    for official domains where search has already failed once.
+
+    Returns a scraped_data-shaped dict on the first matching product found,
+    or None on any failure: not a Shopify site, endpoint disabled, no
+    matching product across all pages tried, network error. Never raises.
+    """
+    needle = _normalise_for_match(model_number)
+    if not needle:
+        return None
+
+    for page in range(1, _SHOPIFY_CATALOG_MAX_PAGES + 1):
+        url = f"https://{domain}/products.json?limit={_SHOPIFY_CATALOG_PAGE_LIMIT}&page={page}"
+        try:
+            async with httpx.AsyncClient(timeout=_SHOPIFY_PREDICTIVE_SEARCH_TIMEOUT_SECONDS) as client:
+                response = await client.get(url)
+            if response.status_code != 200:
+                return None
+            products = response.json().get("products")
+            if not isinstance(products, list):
+                return None
+        except Exception as e:
+            logger.debug(f"Shopify catalog scan not usable on {domain} (page {page}): {e}")
+            return None
+
+        if not products:
+            break
+
+        for product in products:
+            title = str(product.get("title") or "")
+            handle = str(product.get("handle") or "")
+            identity = _normalise_for_match(title) + _normalise_for_match(handle)
+            if needle not in identity:
+                continue
+
+            content = _clean_html_to_text(f"{title}\n{product.get('body_html', '')}")
+            if not content.strip():
+                continue
+
+            variants = product.get("variants") or []
+            # Shopify's variant schema varies by theme/API version -- the
+            # owner's own live test showed a store with NO "available" key
+            # at all on variants (see _shopify_predictive_search_fallback's
+            # docstring). `any(...)` over whatever IS present degrades to
+            # "unknown" (None) rather than a wrong guess when the field is
+            # simply absent everywhere.
+            stock_values = [v.get("available") for v in variants if "available" in v]
+            in_stock = any(stock_values) if stock_values else None
+            stock_note = "in stock" if in_stock else ("OUT OF STOCK" if in_stock is False else "stock status unavailable")
+
+            logger.info(
+                f"Found {model_number} on {domain} via a full Shopify catalog scan "
+                f"(page {page}, {stock_note}) after search excluded it."
+            )
+            return {
+                "url": f"https://{domain}/products/{handle}" if handle else url,
+                "source_type": "official",
+                "content": content,
+                "candidate_titles": [title] if title else [],
+            }
+
+        if len(products) < _SHOPIFY_CATALOG_PAGE_LIMIT:
+            break  # last page, nothing left to scan
+
+    return None
+
+
 async def _official_out_of_stock_fallback(
     domain: str, model_number: str, brand_name: str, require_brand_identity: bool
 ) -> dict[str, Any] | None:
@@ -318,7 +412,7 @@ async def _official_out_of_stock_fallback(
     does not stock it. For an out-of-stock item that inference is wrong: the
     page exists, it just isn't in the search index.
 
-    Three fallbacks, tried in order, official domains ONLY (2026-08-09,
+    Four fallbacks, tried in order, official domains ONLY (2026-08-09,
     owner-directed -- explicitly scoped to the brand's own site, not
     retailers; owner-requested to be "universal" across platforms rather
     than WooCommerce-only, and to avoid depending on a Google key the owner
@@ -332,12 +426,19 @@ async def _official_out_of_stock_fallback(
          fix there is a single documented Shopify query parameter,
          `resources[options][unavailable_products]=show`, which forces
          sold-out products BACK INTO results that exclude them by default.
-      3. A `site:{domain}`-restricted Google search, IF configured (bonus
+      3. Shopify's full catalog listing (_shopify_catalog_scan_fallback) --
+         added 2026-08-10 after the owner's LIVE test on anex.pk showed
+         predictive search, even with the flag above, did not return a real
+         out-of-stock product (AG-10). /products.json is the store's actual
+         catalogue data, not a search index, so it is what actually found
+         that product. More expensive (paginated, up to 1000 products), so
+         tried only after the cheaper predictive-search attempt.
+      4. A `site:{domain}`-restricted Google search, IF configured (bonus
          for any OTHER platform, e.g. Magento, custom-built; zero cost when
          no key is set, which is the owner's current setup).
 
-    Cheap-to-expensive, no-key-first ordering: 1 and 2 are each a single
-    JSON request with no external dependency and no daily quota, so they're
+    Cheap-to-expensive, no-key-first ordering: 1-3 are each plain JSON
+    requests with no external dependency and no daily quota, so they're all
     tried before touching the optional, quota-limited Google tier. Every
     candidate this finds still goes through the SAME identity checks as any
     other source (model_matches_identity, brand_matches_identity for a
@@ -362,6 +463,10 @@ async def _official_out_of_stock_fallback(
     shopify = await _shopify_predictive_search_fallback(domain, model_number)
     if shopify and _identity_ok(shopify):
         return shopify
+
+    shopify_catalog = await _shopify_catalog_scan_fallback(domain, model_number)
+    if shopify_catalog and _identity_ok(shopify_catalog):
+        return shopify_catalog
 
     if not google_search_client.configured:
         return None
