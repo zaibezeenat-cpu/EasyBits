@@ -151,3 +151,106 @@ def test_abbreviation_expansion_helper():
 def test_forbidden_abbreviation_detection():
     assert contains_forbidden_abbreviation("Kenwood 1 Ton KLU-12B03S AC") == "ac"
     assert contains_forbidden_abbreviation("Kenwood 1 Ton KLU-12B03S Air Conditioner") is None
+
+
+# --- Wattage: a confirmed spec fact, not a harvested feature word -----------
+#
+# Owner-reported (2026-08-10, live): AG-3151's title was missing "700W".
+# Unlike a marketing word ("Deluxe"), wattage is already a CONFIRMED spec
+# fact once extraction has it -- there's no hallucination risk in always
+# including it, so it gets its own slot (same treatment as capacity: never
+# dropped for length) rather than depending on whether some competitor's
+# title happened to also mention it.
+
+def test_wattage_is_included_in_the_title():
+    name = build_name("Anex", "", "AG-3151", "Kitchen Robot", wattage="700W",
+                      features=["Deluxe"])
+    assert "700W" in name
+    assert name == "Anex AG-3151 700W Deluxe Kitchen Robot"
+
+
+def test_wattage_sits_in_the_same_slot_as_capacity_when_capacity_is_absent():
+    """A wattage-based small appliance has no 'capacity' in the AC/fridge
+    sense -- wattage fills that identity role instead, ending up in the same
+    position (right after model, before series/features)."""
+    name = build_name("Anex", "", "AG-12", "Food Processor", wattage="450W")
+    assert name == "Anex AG-12 450W Food Processor"
+
+
+def test_wattage_is_never_dropped_for_length():
+    """Confirmed data, not an optional feature -- must survive truncation
+    the same way capacity/series already do."""
+    name = build_name(
+        "Anex", "", "AG-VERY-LONG-MODEL-NUMBER-EXCEEDING-EVERYTHING",
+        "Kitchen Robot", wattage="700W",
+        features=["Multi Function Deluxe Edition With Extra Attachments"],
+    )
+    assert "700W" in name
+
+
+def test_wattage_is_not_duplicated_if_also_harvested_as_a_feature():
+    """
+    A harvested title-term phrase could independently produce "700W" as its
+    own feature (e.g. a scraped title literally contains it as an n-gram) --
+    without dedup this would double up: "Anex AG-3151 700W Deluxe 700W
+    Kitchen Robot". The dedicated wattage slot is authoritative; an
+    exact (case-insensitive) duplicate coming through `features` is dropped.
+    """
+    name = build_name("Anex", "", "AG-3151", "Kitchen Robot", wattage="700W",
+                      features=["700w", "Deluxe"])
+    assert name.count("700W") == 1
+    assert name == "Anex AG-3151 700W Deluxe Kitchen Robot"
+
+
+def test_no_wattage_yields_the_bare_formula_unchanged():
+    """Categories without a wattage spec (ACs, fridges) are unaffected --
+    omitting the argument must not alter existing behavior."""
+    name = build_name("Dawlance", "1.5 Ton", "9199-B", "Air Conditioner")
+    assert name == "Dawlance 9199-B 1.5 Ton Air Conditioner"
+
+
+# --- Title-string sanitizer (Boss Rule Step 3: format hygiene) -------------
+
+def test_empty_brackets_are_stripped():
+    name = build_name("Anex", "", "AG-1", "Blender", features=["()"])
+    assert "()" not in name
+    assert "[]" not in name
+
+
+def test_double_spaces_are_collapsed():
+    name = build_name("Anex", "", "AG-1", "Blender", features=["Turbo  Mode"])
+    assert "  " not in name
+
+
+def test_trailing_hyphen_is_stripped():
+    name = build_name("Anex", "", "AG-1 -", "")
+    assert not name.endswith("-")
+    assert not name.endswith(" -")
+
+
+def test_commas_are_replaced_so_keyword_counting_is_not_disrupted():
+    """
+    Boss Rule #6: commas ruin Rank Math's focus-keyword counting. Replaced
+    with a plain space, not the word "and" -- a title with several commas
+    ("Kitchen Robot, Deluxe, 700W") would otherwise become the spammy
+    "Kitchen Robot and Deluxe and 700W". A space also sidesteps a real
+    category name that already legitimately contains "and" (e.g. "Grinder
+    and Blender") ever being doubled up by the sanitizer.
+    """
+    name = build_name("Anex", "", "AG-1", "Blender", features=["Glass, Steel"])
+    assert "," not in name
+    assert " and " not in name
+    assert "Glass" in name and "Steel" in name
+
+
+def test_multiple_commas_do_not_produce_spammy_repeated_and():
+    name = build_name("Anex", "", "AG-1", "Grinder and Blender",
+                      features=["Glass, Steel, Copper"])
+    assert name.count(" and ") == 1, "only the genuine category 'and' survives"
+
+
+def test_a_category_name_that_legitimately_contains_and_is_untouched():
+    """'Grinder and Blender' is a real combo-appliance category name, not
+    sanitizer output -- must not be mangled."""
+    name = build_name("Anex", "", "AG-1", "Grinder and Blender")
+    assert "Grinder and Blender" in name

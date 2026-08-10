@@ -417,15 +417,17 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
                 for doc in scraped["scraped_data"]
                 for title in doc.get("candidate_titles", [])
             ],
-            # 2026-08-09: the SAME titles, but only from source_type ==
-            # "official" docs, kept separate so harvest_title_terms can trust
-            # the brand's own wording without needing a second seller to
-            # repeat it -- see state.py's official_titles and
-            # title_terms.py's official_titles param.
-            "official_titles": [
+            # 2026-08-09, widened 2026-08-10: the SAME titles, but only from
+            # source_type in (official, trusted_secondary) docs -- kept
+            # separate so harvest_title_terms can trust this wording without
+            # needing a second seller to repeat it. `web` stays excluded,
+            # same reasoning as _brand_identity_ok in orchestrator.py -- see
+            # state.py's trusted_titles and title_terms.py's trusted_titles
+            # param.
+            "trusted_titles": [
                 title
                 for doc in scraped["scraped_data"]
-                if doc.get("source_type") == "official"
+                if doc.get("source_type") in ("official", "trusted_secondary")
                 for title in doc.get("candidate_titles", [])
             ],
         }
@@ -512,13 +514,13 @@ async def writer_node(state: PipelineState) -> dict[str, Any]:
     # --- V8.0 Production Lock: Product Name / Focus Keyword built FIRST, deterministically ---
     # Boss Rule title: [Brand] [Capacity] [SKU] [Series] [Features] [Full Type].
     # Series and feature wording is harvested from how OTHER sellers title this
-    # exact model. 2026-08-09: a term from the brand's OWN official page
-    # (state.official_titles) is trusted on its own -- e.g. "Anex ... Deluxe
-    # ..." -- while a term seen only on a retailer's page (state.
-    # competitor_titles) still needs to match a confirmed spec fact for this
-    # product (a capability extraction never confirmed still never enters the
-    # title). Everything else is dropped -- a shorter title beats an
-    # unverified claim.
+    # exact model. 2026-08-09, widened 2026-08-10: a term from a TRUSTED
+    # source (state.trusted_titles -- official OR trusted_secondary) is
+    # trusted on its own -- e.g. "Anex ... Deluxe/Handy ..." -- while a term
+    # seen only on an unvetted `web` page (state.competitor_titles) still
+    # needs to match a confirmed spec fact for this product (a capability
+    # extraction never confirmed still never enters the title). Everything
+    # else is dropped -- a shorter title beats an unverified claim.
     # The title uses the product's REAL type, not the taxonomy category. A
     # juicer filed under "Blender" is titled "... Hard Fruit Juicer" while its
     # Categories column still reads "Kitchen Appliances > Blender" -- confirmed
@@ -533,11 +535,18 @@ async def writer_node(state: PipelineState) -> dict[str, Any]:
 
     harvested = harvest_title_terms(
         titles=state.competitor_titles,
-        official_titles=state.official_titles,
+        trusted_titles=state.trusted_titles,
         brand=state.raw_input.brand_name,
         model=state.raw_input.model_number,
         capacity=state.extraction.confirmed_value("capacity") or "",
         product_type=real_product_type,
+        # Parity with capacity (2026-08-10, review-flagged): without this a
+        # competitor title's own wattage mention, phrased differently from
+        # the confirmed value ("700 Watts" vs "700W"), would survive
+        # harvesting as a bogus feature and duplicate the dedicated wattage
+        # slot below -- build_name()'s dedup only catches a byte-identical
+        # repeat, not a differently-worded one.
+        wattage=state.extraction.confirmed_value("wattage") or "",
     )
     verified_terms = verify_terms(
         harvested, facts, series=state.extraction.confirmed_value("series")
@@ -560,6 +569,7 @@ async def writer_node(state: PipelineState) -> dict[str, Any]:
         real_product_type,
         features=title_features,
         series=state.extraction.confirmed_value("series"),
+        wattage=state.extraction.confirmed_value("wattage"),
     )
     # Focus keyword strategy (2026-07-27, owner-directed): the PRIMARY focus
     # keyword is the SHORT, searchable brand+model (e.g. "WestPoint Pakistan

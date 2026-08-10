@@ -117,6 +117,20 @@ def test_slug_length_can_fail():
     assert not _run(name="Y" * 200)["slug_length"].passed
 
 
+def test_product_name_format_hygiene_can_fail():
+    """
+    Boss Rule Step 3 (2026-08-10): defense-in-depth second gate -- name_builder.py's
+    _sanitize_title() should already prevent these at build time, but a
+    Product Name can also be edited by hand after generation, so the
+    validator checks the format rules independently rather than trusting
+    the builder was the only path that ever produced this string.
+    """
+    assert not _run(name=f"{KEYWORD} ()")["product_name_format_hygiene"].passed
+    assert not _run(name=f"{KEYWORD}  Extra")["product_name_format_hygiene"].passed
+    assert not _run(name=f"{KEYWORD} -")["product_name_format_hygiene"].passed
+    assert not _run(name=f"Dawlance, DW-131 Inverter Air Conditioner")["product_name_format_hygiene"].passed
+
+
 def test_focus_keyword_is_coherent_primary_can_fail():
     assert not _run(keyword="something, comma stacked")["focus_keyword_is_coherent_primary"].passed
 
@@ -204,7 +218,8 @@ def test_every_emitted_check_has_a_failure_test():
     emitted = set(_run().keys())
 
     covered = {
-        "product_name_length", "product_name_no_abbreviation", "slug_length",
+        "product_name_length", "product_name_no_abbreviation",
+        "product_name_format_hygiene", "slug_length",
         "focus_keyword_is_coherent_primary", "seo_title_contains_focus_keyword",
         "seo_title_power_word", "seo_title_contains_number",
         "focus_keyword_in_subheading", "meta_description_length_150_160",
