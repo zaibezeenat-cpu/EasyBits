@@ -557,7 +557,7 @@ async def test_woocommerce_store_api_finds_an_out_of_stock_product(monkeypatch):
         lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
     )
 
-    result = await orchestrator._woocommerce_store_api_fallback("anex.pk", "AG-01")
+    result = await orchestrator._woocommerce_store_api_fallback("anex.pk", "AG-01", source_type="official")
 
     assert result is not None
     assert result["source_type"] == "official"
@@ -578,7 +578,7 @@ async def test_woocommerce_store_api_returns_none_for_a_non_matching_product(mon
         lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
     )
 
-    result = await orchestrator._woocommerce_store_api_fallback("anex.pk", "AG-01")
+    result = await orchestrator._woocommerce_store_api_fallback("anex.pk", "AG-01", source_type="official")
     assert result is None
 
 
@@ -590,13 +590,13 @@ async def test_woocommerce_store_api_fails_gracefully_on_non_woocommerce_site(mo
         orchestrator.httpx, "AsyncClient",
         lambda **kw: _FakeHttpxClient(_FakeResponse(404, {})),
     )
-    assert await orchestrator._woocommerce_store_api_fallback("shopify-store.pk", "AG-01") is None
+    assert await orchestrator._woocommerce_store_api_fallback("shopify-store.pk", "AG-01", source_type="official") is None
 
     monkeypatch.setattr(
         orchestrator.httpx, "AsyncClient",
         lambda **kw: _FakeHttpxClient(None, raises=httpx.ConnectError("boom")),
     )
-    assert await orchestrator._woocommerce_store_api_fallback("dead-site.pk", "AG-01") is None
+    assert await orchestrator._woocommerce_store_api_fallback("dead-site.pk", "AG-01", source_type="official") is None
 
 
 @pytest.mark.asyncio
@@ -669,7 +669,7 @@ async def test_shopify_predictive_search_finds_an_out_of_stock_product(monkeypat
         lambda **kw: _CapturingClient(_FakeResponse(200, payload)),
     )
 
-    result = await orchestrator._shopify_predictive_search_fallback("brandstore.pk", "AG-01")
+    result = await orchestrator._shopify_predictive_search_fallback("brandstore.pk", "AG-01", source_type="official")
 
     assert result is not None
     assert result["source_type"] == "official"
@@ -691,7 +691,7 @@ async def test_shopify_predictive_search_returns_none_for_a_non_matching_product
         lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
     )
 
-    result = await orchestrator._shopify_predictive_search_fallback("brandstore.pk", "AG-01")
+    result = await orchestrator._shopify_predictive_search_fallback("brandstore.pk", "AG-01", source_type="official")
     assert result is None
 
 
@@ -701,13 +701,13 @@ async def test_shopify_predictive_search_fails_gracefully_on_non_shopify_site(mo
         orchestrator.httpx, "AsyncClient",
         lambda **kw: _FakeHttpxClient(_FakeResponse(404, {})),
     )
-    assert await orchestrator._shopify_predictive_search_fallback("woo-store.pk", "AG-01") is None
+    assert await orchestrator._shopify_predictive_search_fallback("woo-store.pk", "AG-01", source_type="official") is None
 
     monkeypatch.setattr(
         orchestrator.httpx, "AsyncClient",
         lambda **kw: _FakeHttpxClient(None, raises=httpx.ConnectError("boom")),
     )
-    assert await orchestrator._shopify_predictive_search_fallback("dead-site.pk", "AG-01") is None
+    assert await orchestrator._shopify_predictive_search_fallback("dead-site.pk", "AG-01", source_type="official") is None
 
 
 @pytest.mark.asyncio

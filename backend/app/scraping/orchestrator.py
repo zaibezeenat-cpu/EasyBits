@@ -160,7 +160,7 @@ def _normalise_for_match(text: str) -> str:
 
 
 async def _woocommerce_store_api_fallback(
-    domain: str, model_number: str, source_type: str = "official"
+    domain: str, model_number: str, *, source_type: str
 ) -> dict[str, Any] | None:
     """
     WooCommerce's built-in public Store REST API -- no key, no auth, enabled
@@ -235,7 +235,7 @@ _SHOPIFY_PREDICTIVE_SEARCH_TIMEOUT_SECONDS = 12.0
 
 
 async def _shopify_predictive_search_fallback(
-    domain: str, model_number: str, source_type: str = "official"
+    domain: str, model_number: str, *, source_type: str
 ) -> dict[str, Any] | None:
     """
     Shopify's public Predictive Search API -- no key, no auth, same endpoint
@@ -547,11 +547,11 @@ async def _platform_fast_json_lookup(
             brand_name, candidate["url"], candidate["candidate_titles"]
         )
 
-    woo = await _woocommerce_store_api_fallback(domain, model_number, source_type)
+    woo = await _woocommerce_store_api_fallback(domain, model_number, source_type=source_type)
     if woo and _identity_ok(woo):
         return woo
 
-    shopify = await _shopify_predictive_search_fallback(domain, model_number, source_type)
+    shopify = await _shopify_predictive_search_fallback(domain, model_number, source_type=source_type)
     if shopify and _identity_ok(shopify):
         return shopify
 
