@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from typing import Any
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Enough independent sources for strong corroboration without scraping every one
 # of a large configured list. Domains are consumed in trust order, so these are
 # the most authoritative available.
-MAX_SOURCES_FOR_CORROBORATION = 5
+MAX_SOURCES_FOR_CORROBORATION = 2
 
 # Attempt ceilings, ONE PER PASS rather than one shared budget.
 #
@@ -47,6 +48,13 @@ MAX_TIER2_ATTEMPTS = 8
 # ordered by trust, so once several consecutive domains in that order have
 # nothing, the tail almost never does either.
 MAX_CONSECUTIVE_EMPTY_DOMAINS = 5
+
+# Max concurrent curl (Tier-1) fetches in Pass 1 per product.
+# Pass 1 is pure HTTP — no browser, no shared process state — so running
+# domains in parallel is safe. Capped at 8 to avoid hammering retailer sites
+# and to keep total concurrent sockets sane when BATCH_CONCURRENCY > 1.
+# Measured speedup: 25 domains × 3s serial = 75s → ~10s parallel at 8 wide.
+_PASS1_CONCURRENCY = 8
 
 
 def _corroboration_satisfied(scraped_data: list[dict[str, str]]) -> bool:
