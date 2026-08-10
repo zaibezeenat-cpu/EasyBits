@@ -157,6 +157,68 @@ async def test_writer_node_builds_deterministic_fields_not_llm_ones(taxonomy, mo
 
 
 @pytest.mark.asyncio
+async def test_writer_node_trusts_a_trusted_secondary_title_without_a_fact_match(taxonomy, monkeypatch):
+    """
+    Owner-reported (2026-08-10, live): AG-12's title was missing "Handy" --
+    a marketing word that was never going to be a confirmed spec fact. Only
+    an `official`-sourced title used to skip the fact-matching gate;
+    `trusted_secondary` (the owner's OTHER already-scraped source, per his
+    explicit "1 official aur 1 retailer, bas title sahi karna" scope) now
+    gets the same treatment, using titles already collected -- no new
+    scraping involved.
+    """
+    async def fake_call(**_kwargs):
+        return _writer_output()
+
+    monkeypatch.setattr(nodes.llm_provider, "call", fake_call)
+
+    # "Handy" is on the retailer's (trusted_secondary) title only -- never
+    # independently confirmed as a spec fact, and not on any official title.
+    result = await nodes.writer_node(_state(
+        competitor_titles=["Kenwood Handy KLU-12B03S Split Air Conditioner"],
+        trusted_titles=["Kenwood Handy KLU-12B03S Split Air Conditioner"],
+    ))
+    assert "Handy" in result["name"]
+
+
+@pytest.mark.asyncio
+async def test_writer_node_still_requires_a_fact_match_for_a_web_only_title(taxonomy, monkeypatch):
+    """Regression guard: an unvetted `web` source is NOT part of the trusted
+    bucket -- a marketing word seen only there still needs a confirmed spec
+    fact, same as before this change."""
+    async def fake_call(**_kwargs):
+        return _writer_output()
+
+    monkeypatch.setattr(nodes.llm_provider, "call", fake_call)
+
+    result = await nodes.writer_node(_state(
+        competitor_titles=["Kenwood Turbo KLU-12B03S Split Air Conditioner"],
+        trusted_titles=[],  # not from official or trusted_secondary
+    ))
+    assert "Turbo" not in result["name"]
+
+
+@pytest.mark.asyncio
+async def test_writer_node_includes_a_confirmed_wattage_in_the_title(taxonomy, monkeypatch):
+    """Owner-reported (2026-08-10, live): AG-3151's title was missing
+    "700W" -- a confirmed spec fact, not a harvested marketing word, so it
+    must always reach the title once extraction has confirmed it."""
+    async def fake_call(**_kwargs):
+        return _writer_output()
+
+    monkeypatch.setattr(nodes.llm_provider, "call", fake_call)
+
+    extraction = _extraction()
+    extraction.citations.append(SourceCitation(
+        field_name="wattage", value="700W", source_url="https://s.pk/p",
+        source_type="official", confidence="confirmed",
+        fetched_at=datetime.now(UTC),
+    ))
+    result = await nodes.writer_node(_state(extraction=extraction))
+    assert "700W" in result["name"]
+
+
+@pytest.mark.asyncio
 async def test_writer_node_uses_sheet_warranty_over_matrix(taxonomy, monkeypatch):
     """The operator's per-product warranty is authoritative over the matrix."""
     async def fake_call(**_kwargs):
@@ -216,8 +278,9 @@ async def test_reviewer_runs_deterministic_seo_checks(monkeypatch):
     review = result["review_result"]
     # Every deterministic check runs regardless of what the LLM said. The count
     # grew from 13 to 17 when the Rank Math gaps were closed (SEO title contains
-    # the focus keyword, power word, number in title, keyword in subheading).
-    assert len(review.checks) == 18
+    # the focus keyword, power word, number in title, keyword in subheading),
+    # then to 19 when product_name_format_hygiene was added (Boss Rule Step 3).
+    assert len(review.checks) == 19
     names = {c.check_name for c in review.checks}
     for required in (
         "seo_title_contains_focus_keyword",

@@ -208,17 +208,50 @@ def test_a_brand_marketing_word_from_the_official_page_reaches_the_title():
     facts = {"capacity": "600W", "material": "Plastic"}  # "Deluxe" nowhere in here.
     harvested = harvest_title_terms(
         titles=[],
-        official_titles=["Anex Deluxe Chopper AG-3001"],
+        trusted_titles=["Anex Deluxe Chopper AG-3001"],
         brand="Anex", model="AG-3001", product_type="Chopper",
     )
     terms = {t.term.lower(): t for t in verify_terms(harvested, facts)}
     assert "deluxe" in terms
-    assert terms["deluxe"].from_official
+    assert terms["deluxe"].from_trusted_source
     assert terms["deluxe"].corroborated
     assert terms["deluxe"].verified
 
     selected = select_title_features(list(terms.values()))
     assert "Deluxe" in selected
+
+
+# --- Wattage parity with capacity (2026-08-10, review-flagged) -------------
+#
+# capacity is already passed into harvest_title_terms so its own words are
+# stripped from harvested phrases (_tokens_to_drop) -- otherwise a
+# competitor title's own capacity wording would be harvested as a bogus
+# "feature". Wattage now has the identical dedicated slot in build_name(),
+# so it needs the identical drop-token treatment: without this, a
+# differently-formatted wattage mention on a competitor title ("700 Watts"
+# vs. the confirmed "700W") survives harvesting as an ordinary feature and
+# is NOT caught by build_name()'s exact-match dedup (which only catches a
+# byte-identical repeat) -- reproducing the exact duplicate-title problem
+# this fix exists to prevent.
+
+def test_wattage_words_are_dropped_from_harvested_phrases_like_capacity():
+    harvested = harvest_title_terms(
+        titles=["Anex AG-3151 700W Deluxe Kitchen Robot"],
+        brand="Anex", model="AG-3151", product_type="Kitchen Robot",
+        wattage="700W",
+    )
+    assert all("700w" not in t.term.lower() for t in harvested)
+
+
+def test_a_differently_worded_wattage_mention_is_also_dropped():
+    """The real risk: same wattage, different phrasing ('700 Watts' vs the
+    confirmed '700W') -- must not survive as a spurious feature term."""
+    harvested = harvest_title_terms(
+        titles=["Anex AG-3151 700 Watts Deluxe Kitchen Robot"],
+        brand="Anex", model="AG-3151", product_type="Kitchen Robot",
+        wattage="700 Watts",
+    )
+    assert all("watt" not in t.term.lower() for t in harvested)
 
 
 def test_a_retailer_only_word_still_needs_a_confirmed_fact():
