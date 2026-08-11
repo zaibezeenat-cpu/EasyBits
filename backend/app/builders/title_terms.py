@@ -60,25 +60,42 @@ class TitleTerm(BaseModel):
     corroborated: bool
     verified: bool
     reason: str = ""
-    # 2026-08-09 (owner-directed): a term the BRAND'S OWN official page uses
-    # ("Anex ... Deluxe ...") is trusted on its own -- it does not need a
-    # second unrelated seller repeating it, and it does not need to match a
-    # confirmed SPEC fact, because a marketing/series word ("Deluxe") was
-    # never going to be a spec fact in the first place. This mirrors
-    # ExtractionResult.confirmed_value's rule: an official source is already
-    # the most authoritative tier (fact_corroboration._TIER_RANK), so it
-    # doesn't need corroborating against itself.
-    from_official: bool = False
+    # 2026-08-09, widened 2026-08-10 (owner-directed): a term from a TRUSTED
+    # source -- official OR trusted_secondary -- is trusted on its own -- it
+    # does not need a second unrelated seller repeating it, and it does not
+    # need to match a confirmed SPEC fact, because a marketing/series word
+    # ("Deluxe", "Handy") was never going to be a spec fact in the first
+    # place. Originally official-only; widened after the owner reported real
+    # marketing words missing from titles built from the SAME 1 official + 1
+    # trusted_secondary source already being scraped for facts (no new
+    # scraping added -- see harvest_title_terms's docstring). This mirrors
+    # both ExtractionResult.confirmed_value's rule (official is already the
+    # most authoritative tier, fact_corroboration._TIER_RANK) and
+    # orchestrator.py's _brand_identity_ok (official+trusted_secondary get a
+    # specific bounded trust allowance; unvetted `web` does not).
+    from_trusted_source: bool = False
 
 
 def _normalise(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9&\- ]+", " ", text or "")).strip()
 
 
-def _tokens_to_drop(brand: str, model: str, capacity: str, product_type: str) -> set[str]:
-    """Words already represented by other parts of the Boss Rule formula."""
+def _tokens_to_drop(
+    brand: str, model: str, capacity: str, product_type: str, wattage: str = "",
+) -> set[str]:
+    """
+    Words already represented by other parts of the Boss Rule formula.
+
+    `wattage` (2026-08-10, review-flagged parity fix): dropped the same way
+    `capacity` already is -- both now have a dedicated slot in build_name(),
+    so a competitor title's own mention of either must not ALSO survive
+    harvesting as a bogus "feature" term. Without this, a wattage phrased
+    differently from the confirmed value ("700 Watts" vs. "700W") would
+    slip through -- build_name()'s dedup only catches a byte-identical
+    repeat, not a differently-worded one.
+    """
     drop = set(_STOPWORDS)
-    for part in (brand, model, capacity, product_type):
+    for part in (brand, model, capacity, product_type, wattage):
         for token in _normalise(part or "").lower().split():
             drop.add(token)
             drop.add(token.rstrip("s"))
@@ -128,7 +145,8 @@ def harvest_title_terms(
     capacity: str = "",
     product_type: str = "",
     min_frequency: int = 1,
-    official_titles: Iterable[str] = (),
+    trusted_titles: Iterable[str] = (),
+    wattage: str = "",
 ) -> list[TitleTerm]:
     """
     Extracts candidate series/feature phrases from competitor titles, ranked by
@@ -150,25 +168,33 @@ def harvest_title_terms(
     words are joined into phrases so "Luxury Ultra" stays together rather than
     becoming two unrelated tokens.
 
-    `official_titles` -- the brand's OWN page title(s), when a source scraped
-    for this product was source_type == "official" -- are a separate, trusted
-    channel (2026-08-09, owner-directed). A phrase found there is marked
-    `from_official=True` and treated as corroborated regardless of frequency:
-    it does not need a second, unrelated seller to also use it, because the
-    brand's own product page is already the most authoritative source in this
-    system's trust hierarchy (see fact_corroboration._TIER_RANK). This is what
-    lets a genuine brand-marketing word ("Deluxe") reach the title even when
-    only one seller (the brand itself) ever wrote it down.
+    `trusted_titles` -- title(s) from a source this system already treats as
+    reliable for this specific product: source_type == "official" OR
+    "trusted_secondary" (2026-08-09, widened 2026-08-10 -- owner-reported
+    real marketing words missing from titles built off the SAME 1 official +
+    1 trusted_secondary source already being scraped for facts; no new
+    scraping was added to fix this, only which of the already-scraped titles
+    get this trust). A phrase found there is marked `from_trusted_source=True`
+    and treated as corroborated regardless of frequency: it does not need a
+    second, unrelated seller to also use it, because both tiers are already
+    trusted enough elsewhere in this system's design for a bounded judgment
+    like this (official is authoritative alone; trusted_secondary is an
+    owner-curated list -- see orchestrator.py's _brand_identity_ok for the
+    identical reasoning applied to brand-identity matching). An unvetted
+    `web` source's title stays in the plain `titles` argument and still needs
+    to clear the fact-matching gate below. This is what lets a genuine
+    marketing word ("Deluxe", "Handy") reach the title even when only one
+    trusted seller ever wrote it down.
     """
-    drop = _tokens_to_drop(brand, model, capacity, product_type)
+    drop = _tokens_to_drop(brand, model, capacity, product_type, wattage)
     model_key = re.sub(r"[^a-z0-9]", "", (model or "").lower())
 
     phrase_counts: Counter[str] = Counter()
-    official_phrases: set[str] = set()
-    for raw_title in official_titles:
+    trusted_phrases: set[str] = set()
+    for raw_title in trusted_titles:
         phrases = _phrases_in_title(raw_title, drop, model_key)
         if phrases:
-            official_phrases |= phrases
+            trusted_phrases |= phrases
 
     for raw_title in titles:
         phrases_in_title = _phrases_in_title(raw_title, drop, model_key)
@@ -179,11 +205,11 @@ def harvest_title_terms(
         for phrase in phrases_in_title:
             phrase_counts[phrase] += 1
 
-    # An official-only phrase (never repeated in any competitor title at all)
+    # A trusted-only phrase (never repeated in any competitor title at all)
     # still needs to be counted at least once so it appears in the result set
-    # below -- harvesting from official_titles alone must not depend on the
+    # below -- harvesting from trusted_titles alone must not depend on the
     # same phrase also showing up in `titles`.
-    for phrase in official_phrases:
+    for phrase in trusted_phrases:
         if phrase not in phrase_counts:
             phrase_counts[phrase] = 1
 
@@ -212,16 +238,16 @@ def harvest_title_terms(
     for phrase, count in phrase_counts.most_common():
         if phrase in redundant:
             continue
-        is_official = phrase in official_phrases
-        corroborated = is_official or count >= min_frequency
+        is_trusted = phrase in trusted_phrases
+        corroborated = is_trusted or count >= min_frequency
         terms.append(TitleTerm(
             term=phrase,
             frequency=count,
             corroborated=corroborated,
             verified=False,
-            from_official=is_official,
+            from_trusted_source=is_trusted,
             reason=(
-                "sourced from the brand's own official page" if is_official else
+                "sourced from a trusted (official/trusted_secondary) source" if is_trusted else
                 "" if count >= min_frequency else
                 f"appears in only {count} title(s); needs {min_frequency}"
             ),
@@ -247,14 +273,15 @@ def verify_terms(
         extracted series value rather than the spec text: a series name
         ("Luxury Ultra", "Titan") identifies the model rather than asserting
         a capability, and it does not appear in the specifications.
-      - `from_official` terms (2026-08-09, owner-directed): a marketing/series
-        word straight from the brand's own page ("Anex Deluxe...") was never
-        going to appear in a SPEC fact either -- "Deluxe" is not a capacity or
-        a wattage. Requiring it to match confirmed_facts would reject it for a
-        reason that has nothing to do with whether the claim is true. The
-        official source is already the most authoritative tier this system
-        has, so its own wording is trusted outright rather than checked
-        against a fact list it was never going to be found in.
+      - `from_trusted_source` terms (2026-08-09, widened 2026-08-10,
+        owner-directed): a marketing/series word from a trusted (official OR
+        trusted_secondary) source's page ("Anex Deluxe...", "Anex Handy...")
+        was never going to appear in a SPEC fact either -- "Deluxe" is not a
+        capacity or a wattage. Requiring it to match confirmed_facts would
+        reject it for a reason that has nothing to do with whether the claim
+        is true. Both tiers are already trusted outright rather than checked
+        against a fact list they were never going to be found in -- an
+        unvetted `web` source's wording still has to clear that check.
 
     "UNKNOWN" facts count as absent, so a capability extraction could not
     confirm can never be justified by sellers repeating it.
@@ -274,10 +301,10 @@ def verify_terms(
 
         key = term.term.lower()
 
-        if term.from_official:
+        if term.from_trusted_source:
             verified.append(term.model_copy(update={
                 "verified": True,
-                "reason": "sourced from the brand's own official page",
+                "reason": "sourced from a trusted (official/trusted_secondary) source",
             }))
             continue
 

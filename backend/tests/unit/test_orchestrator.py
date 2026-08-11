@@ -21,6 +21,31 @@ def _result(url: str, content: str, links=None) -> ScrapeResult:
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_network_for_the_fast_path(monkeypatch):
+    """
+    2026-08-10: the platform fast path (_platform_fast_json_lookup) now
+    runs for EVERY official/trusted_secondary domain, not just official --
+    so every test in this file that doesn't care about it would otherwise
+    make 2 REAL (sandbox-blocked) network attempts per domain. Autouse so
+    every test gets an instant, harmless "not this platform" by default;
+    tests that actually exercise the fast path override this with their
+    own httpx.AsyncClient mock, which simply replaces this one for that
+    test.
+    """
+    class _InstantMiss:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, **kwargs):
+            raise httpx.ConnectError("no real network in tests")
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda **kw: _InstantMiss())
+
+
 @pytest.fixture
 def one_source(monkeypatch):
     async def sources(_brand, _model, **_kw):
@@ -102,6 +127,81 @@ async def test_detail_page_for_the_wrong_product_is_rejected(one_source, monkeyp
 
     result = await orchestrator.scrape_product("Kenwood", "KLU-12B03S")
     assert "failure" in result
+
+
+# --- Brand identity on a shared host: model match is enough for a curated
+# retailer, but NOT for official or web sources --------------------------
+#
+# Owner-directed (2026-08-10, live): "model number match kar gaye kafi hai
+# ... bohot kam log brand mention karte hain ... yehi main karta hoon, yehi
+# mey chahta hoon." A trusted_secondary retailer (Settings -> Trusted
+# Secondary Sources -- an owner-curated list) routinely copies the
+# manufacturer's own title verbatim, which very often omits the brand name
+# entirely. Held pending this exact confirmation before implementing (see
+# the wiggly-painting-pebble plan's B0-retailer-fix) -- this is that
+# confirmation.
+
+
+@pytest.mark.asyncio
+async def test_trusted_secondary_accepted_on_model_match_alone_when_title_omits_brand(monkeypatch):
+    """The real reported shape: title/URL never says "Anex", only the model."""
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "AG-10 Handy Chopper With 10 Functions")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    search_result = _result(
+        "https://surmawala.pk/search?q=AG-10", "53 results for AG-10",
+        links=["https://surmawala.pk/products/ag-10-handy-chopper"],
+    )
+    detail = await orchestrator._follow_to_detail_page(
+        search_result, "AG-10", brand_name="Anex",
+        require_brand_identity=True, source_type="trusted_secondary",
+    )
+    assert detail is not None, (
+        "a curated retailer must be accepted on a strict model-number match "
+        "even when its title never names the brand"
+    )
+
+
+@pytest.mark.asyncio
+async def test_official_source_is_still_rejected_when_brand_not_named(monkeypatch):
+    """Regression guard: official stays the authoritative-alone tier, so a
+    wrong-brand page there is a real problem -- unlike trusted_secondary,
+    this must NOT be softened."""
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "AG-10 Handy Chopper With 10 Functions")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    search_result = _result(
+        "https://dwphome.pk/search?q=AG-10", "53 results for AG-10",
+        links=["https://dwphome.pk/products/ag-10-handy-chopper"],
+    )
+    detail = await orchestrator._follow_to_detail_page(
+        search_result, "AG-10", brand_name="Anex",
+        require_brand_identity=True, source_type="official",
+    )
+    assert detail is None
+
+
+@pytest.mark.asyncio
+async def test_web_source_is_still_rejected_when_brand_not_named(monkeypatch):
+    """Regression guard: `web` is unvetted by definition -- never softened."""
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "AG-10 Handy Chopper With 10 Functions")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    search_result = _result(
+        "https://randomblog.pk/search?q=AG-10", "53 results for AG-10",
+        links=["https://randomblog.pk/products/ag-10-handy-chopper"],
+    )
+    detail = await orchestrator._follow_to_detail_page(
+        search_result, "AG-10", brand_name="Anex",
+        require_brand_identity=True, source_type="web",
+    )
+    assert detail is None
 
 
 @pytest.mark.asyncio
@@ -532,7 +632,7 @@ async def test_woocommerce_store_api_finds_an_out_of_stock_product(monkeypatch):
         lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
     )
 
-    result = await orchestrator._woocommerce_store_api_fallback("anex.pk", "AG-01")
+    result = await orchestrator._woocommerce_store_api_fallback("anex.pk", "AG-01", source_type="official")
 
     assert result is not None
     assert result["source_type"] == "official"
@@ -553,7 +653,7 @@ async def test_woocommerce_store_api_returns_none_for_a_non_matching_product(mon
         lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
     )
 
-    result = await orchestrator._woocommerce_store_api_fallback("anex.pk", "AG-01")
+    result = await orchestrator._woocommerce_store_api_fallback("anex.pk", "AG-01", source_type="official")
     assert result is None
 
 
@@ -565,13 +665,13 @@ async def test_woocommerce_store_api_fails_gracefully_on_non_woocommerce_site(mo
         orchestrator.httpx, "AsyncClient",
         lambda **kw: _FakeHttpxClient(_FakeResponse(404, {})),
     )
-    assert await orchestrator._woocommerce_store_api_fallback("shopify-store.pk", "AG-01") is None
+    assert await orchestrator._woocommerce_store_api_fallback("shopify-store.pk", "AG-01", source_type="official") is None
 
     monkeypatch.setattr(
         orchestrator.httpx, "AsyncClient",
         lambda **kw: _FakeHttpxClient(None, raises=httpx.ConnectError("boom")),
     )
-    assert await orchestrator._woocommerce_store_api_fallback("dead-site.pk", "AG-01") is None
+    assert await orchestrator._woocommerce_store_api_fallback("dead-site.pk", "AG-01", source_type="official") is None
 
 
 @pytest.mark.asyncio
@@ -644,7 +744,7 @@ async def test_shopify_predictive_search_finds_an_out_of_stock_product(monkeypat
         lambda **kw: _CapturingClient(_FakeResponse(200, payload)),
     )
 
-    result = await orchestrator._shopify_predictive_search_fallback("brandstore.pk", "AG-01")
+    result = await orchestrator._shopify_predictive_search_fallback("brandstore.pk", "AG-01", source_type="official")
 
     assert result is not None
     assert result["source_type"] == "official"
@@ -666,7 +766,7 @@ async def test_shopify_predictive_search_returns_none_for_a_non_matching_product
         lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
     )
 
-    result = await orchestrator._shopify_predictive_search_fallback("brandstore.pk", "AG-01")
+    result = await orchestrator._shopify_predictive_search_fallback("brandstore.pk", "AG-01", source_type="official")
     assert result is None
 
 
@@ -676,13 +776,13 @@ async def test_shopify_predictive_search_fails_gracefully_on_non_shopify_site(mo
         orchestrator.httpx, "AsyncClient",
         lambda **kw: _FakeHttpxClient(_FakeResponse(404, {})),
     )
-    assert await orchestrator._shopify_predictive_search_fallback("woo-store.pk", "AG-01") is None
+    assert await orchestrator._shopify_predictive_search_fallback("woo-store.pk", "AG-01", source_type="official") is None
 
     monkeypatch.setattr(
         orchestrator.httpx, "AsyncClient",
         lambda **kw: _FakeHttpxClient(None, raises=httpx.ConnectError("boom")),
     )
-    assert await orchestrator._shopify_predictive_search_fallback("dead-site.pk", "AG-01") is None
+    assert await orchestrator._shopify_predictive_search_fallback("dead-site.pk", "AG-01", source_type="official") is None
 
 
 @pytest.mark.asyncio
@@ -727,3 +827,382 @@ async def test_official_fallback_tries_shopify_when_woocommerce_finds_nothing(
     assert result["scraped_data"][0]["url"] == "https://brand.pk/products/ag-01"
     assert any("wp-json/wc/store" in u for u in call_urls), "WooCommerce must be tried first"
     assert any("search/suggest.json" in u for u in call_urls), "Shopify must be tried after WooCommerce fails"
+
+
+# --- Shopify full-catalog scan (2026-08-10, owner's live test on anex.pk) ---
+#
+# The owner's own curl test against anex.pk showed predictive search --
+# even WITH unavailable_products=show -- did not return AG-10 (a real
+# out-of-stock product). /products/{handle}.json for the SAME product,
+# fetched directly, returned the full real product data. These tests use
+# a shape modelled on that real response (no "available" key on the
+# variant at all, per the owner's actual output) to prove the catalog scan
+# finds what predictive search missed.
+
+_ANEX_AG10_VARIANT_NO_AVAILABLE_KEY = {
+    # Mirrors the REAL anex.pk response shape the owner pasted: no
+    # "available" or "inventory_quantity" key present at all.
+    "id": 45705528049919, "product_id": 8741701386495, "title": "Default Title",
+    "price": "3300.00", "sku": None, "inventory_management": "shopify",
+}
+
+
+@pytest.mark.asyncio
+async def test_shopify_catalog_scan_finds_the_real_anex_ag10_shape(monkeypatch):
+    payload = {"products": [{
+        "title": "AG-10 Handy Chopper With 10 Functions",
+        "handle": "ag-10-handy-chopper-with-10-functions",
+        "body_html": "<p>A Power full chopper and grinder assisted with 4 disks for mincing</p>",
+        "variants": [_ANEX_AG10_VARIANT_NO_AVAILABLE_KEY],
+    }]}
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    result = await orchestrator._shopify_catalog_scan_fallback("anex.pk", "AG-10")
+
+    assert result is not None
+    assert result["url"] == "https://anex.pk/products/ag-10-handy-chopper-with-10-functions"
+    assert "Power full chopper" in result["content"]
+    assert "<p>" not in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_shopify_catalog_scan_paginates_when_the_product_is_on_page_2(monkeypatch):
+    """A store with more than 250 products must not stop after page 1."""
+    page_calls = []
+
+    async def routed_get(self, url, **kwargs):
+        page_calls.append(url)
+        if "page=1" in url:
+            # A full page (250 items) -- must try page 2.
+            filler = [{"title": f"Other Product {i}", "handle": f"other-{i}", "body_html": "", "variants": []}
+                      for i in range(250)]
+            return _FakeResponse(200, {"products": filler})
+        if "page=2" in url:
+            return _FakeResponse(200, {"products": [{
+                "title": "AG-10 Handy Chopper", "handle": "ag-10-handy-chopper",
+                "body_html": "Chopper.", "variants": [],
+            }]})
+        return _FakeResponse(200, {"products": []})
+
+    class _RoutingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        get = routed_get
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda **kw: _RoutingClient())
+
+    result = await orchestrator._shopify_catalog_scan_fallback("anex.pk", "AG-10")
+
+    assert result is not None
+    assert "ag-10-handy-chopper" in result["url"]
+    assert any("page=2" in u for u in page_calls), "must have paginated to page 2"
+
+
+@pytest.mark.asyncio
+async def test_shopify_catalog_scan_stops_after_max_pages(monkeypatch):
+    """Bounded cost: must not scan forever on a huge or misbehaving catalogue."""
+    call_count = 0
+
+    async def routed_get(self, url, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        filler = [{"title": f"Other {i}", "handle": f"other-{i}", "body_html": "", "variants": []}
+                  for i in range(250)]
+        return _FakeResponse(200, {"products": filler})
+
+    class _RoutingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        get = routed_get
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda **kw: _RoutingClient())
+
+    result = await orchestrator._shopify_catalog_scan_fallback("huge-store.pk", "NEVER-THERE")
+
+    assert result is None
+    assert call_count == orchestrator._SHOPIFY_CATALOG_MAX_PAGES
+
+
+@pytest.mark.asyncio
+async def test_official_fallback_tries_catalog_scan_when_predictive_search_misses(
+    one_official_source, monkeypatch
+):
+    """
+    THE EXACT OWNER-REPORTED SEQUENCE: WooCommerce isn't this platform,
+    predictive search returns nothing for this product (as the owner's live
+    test showed), catalog scan finds it.
+    """
+    call_urls = []
+
+    async def routed_get(self, url, **kwargs):
+        call_urls.append(url)
+        if "wp-json/wc/store" in url:
+            return _FakeResponse(404, {})
+        if "search/suggest.json" in url:
+            return _FakeResponse(200, {"resources": {"results": {"products": []}}})
+        if "products.json" in url:
+            return _FakeResponse(200, {"products": [{
+                "title": "AG-10 Handy Chopper With 10 Functions",
+                "handle": "ag-10-handy-chopper-with-10-functions",
+                "body_html": "A power full chopper and grinder.",
+                "variants": [_ANEX_AG10_VARIANT_NO_AVAILABLE_KEY],
+            }]})
+        return _FakeResponse(404, {})
+
+    class _RoutingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        get = routed_get
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda **kw: _RoutingClient())
+
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "Anex Pakistan -- browse our full range.")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+    monkeypatch.setattr(orchestrator.google_search_client, "api_key", None)
+    monkeypatch.setattr(orchestrator.google_search_client, "cx", None)
+
+    result = await orchestrator.scrape_product("Anex", "AG-10")
+
+    assert "failure" not in result
+    assert "ag-10-handy-chopper-with-10-functions" in result["scraped_data"][0]["url"]
+    assert any("products.json" in u for u in call_urls), "catalog scan must have been tried"
+
+
+# --- The fast path itself (2026-08-10, owner-directed "100x faster") -------
+
+@pytest.mark.asyncio
+async def test_official_domain_skips_smart_fetch_entirely_when_the_fast_path_hits(
+    one_official_source, monkeypatch
+):
+    """
+    THE ACTUAL SPEED CLAIM: when the official domain's JSON API finds the
+    product, smart_fetch (the whole curl-then-maybe-Playwright cascade)
+    must never be called at all -- one JSON request replaces it entirely.
+    """
+    payload = [{
+        "name": "Anex AG-01 Handy Pull Chopper", "sku": "AG-01",
+        "permalink": "https://brand.pk/product/ag-01/",
+        "short_description": "Manual chopper.", "description": "", "is_in_stock": True,
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    smart_fetch_called = False
+
+    async def fail_if_called(*args, **kwargs):
+        nonlocal smart_fetch_called
+        smart_fetch_called = True
+        raise AssertionError("smart_fetch must not be called when the fast path hits")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fail_if_called)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" not in result
+    assert result["scraped_data"][0]["url"] == "https://brand.pk/product/ag-01/"
+    assert not smart_fetch_called
+
+
+@pytest.mark.asyncio
+async def test_fast_path_tiers_are_only_tried_once_never_repeated_by_the_deep_fallback(
+    one_official_source, monkeypatch
+):
+    """
+    The fast path (WooCommerce Store API, Shopify predictive search) runs
+    ONCE, in pass 1, for every official domain. When it misses and the
+    normal search cascade also bails, pass 2's deeper fallback
+    (_official_out_of_stock_fallback) must NOT repeat those same two
+    requests -- they already failed for this domain moments earlier in the
+    same pass -- it should go straight to the catalog scan, its next real
+    tier.
+    """
+    call_urls = []
+
+    async def counting_get(self, url, **kwargs):
+        call_urls.append(url)
+        return _FakeResponse(200, [])  # never finds anything, so every tier runs
+
+    class _CountingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        get = counting_get
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda **kw: _CountingClient())
+    monkeypatch.setattr(orchestrator.google_search_client, "api_key", None)
+    monkeypatch.setattr(orchestrator.google_search_client, "cx", None)
+
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        return _result(url, "Anex Pakistan -- browse our full range.")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    await orchestrator.scrape_product("Anex", "AG-01")
+
+    woo_calls = [u for u in call_urls if "wp-json/wc/store" in u]
+    predictive_calls = [u for u in call_urls if "search/suggest.json" in u]
+    catalog_calls = [u for u in call_urls if "/products.json" in u]
+
+    assert len(woo_calls) == 1, "WooCommerce Store API must be tried exactly once (fast path, pass 1)"
+    assert len(predictive_calls) == 1, "Shopify predictive search must be tried exactly once (fast path, pass 1)"
+    assert len(catalog_calls) >= 1, "the deep fallback's catalog scan must still run when everything else misses"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_miss_falls_through_to_the_normal_cascade(
+    one_official_source, monkeypatch
+):
+    """When the fast path finds nothing, the existing search-pattern cascade
+    must still run exactly as before -- this is additive, not a replacement."""
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(404, {})),
+    )
+
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        if "/products/" in url:
+            return _result(url, "Anex AG-01 Handy Pull Chopper full specifications")
+        return _result(url, "53 results found for AG-01",
+                       links=["https://brand.pk/products/anex-ag-01"])
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" not in result
+    assert result["scraped_data"][0]["url"] == "https://brand.pk/products/anex-ag-01"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_now_runs_for_retailer_domains_too(monkeypatch):
+    """
+    2026-08-10 (owner-directed follow-up): extended from official-only to
+    EVERY domain, including trusted_secondary retailers (Surmawala, Japan
+    Electronics, Bismillah, Modern Electronics, etc.) -- no per-retailer
+    platform configuration needed, both cheap JSON lookups are just tried
+    for any domain and whichever matches (or neither) is discovered
+    automatically.
+    """
+    async def sources(_brand, _model, **_kw):
+        return [{"url": "https://retailer.pk/search?q=x", "source_type": "trusted_secondary",
+                 "domain": "retailer.pk"}]
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(orchestrator, "resolve_sources", sources)
+    monkeypatch.setattr(orchestrator, "remember_working_template", noop)
+
+    payload = [{
+        "name": "Anex AG-01 Handy Pull Chopper", "sku": "AG-01",
+        "permalink": "https://retailer.pk/product/ag-01/",
+        "short_description": "Manual chopper.", "description": "", "is_in_stock": True,
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    smart_fetch_called = False
+
+    async def fail_if_called(*args, **kwargs):
+        nonlocal smart_fetch_called
+        smart_fetch_called = True
+        raise AssertionError("smart_fetch must not be needed when the fast path hits a retailer too")
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fail_if_called)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" not in result
+    assert not smart_fetch_called
+    # A retailer found via the fast path must stay labelled trusted_secondary
+    # -- the fetch MECHANISM never upgrades a source's trust tier.
+    assert result["scraped_data"][0]["source_type"] == "trusted_secondary"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_miss_on_a_retailer_falls_through_to_the_normal_cascade(monkeypatch):
+    """When the fast path finds nothing on a retailer domain, the existing
+    search-pattern cascade must still run exactly as before."""
+    async def sources(_brand, _model, **_kw):
+        return [{"url": "https://retailer.pk/search?q=x", "source_type": "trusted_secondary",
+                 "domain": "retailer.pk"}]
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(orchestrator, "resolve_sources", sources)
+    monkeypatch.setattr(orchestrator, "remember_working_template", noop)
+    # Autouse _no_real_network_for_the_fast_path already makes the fast path
+    # miss instantly here -- no override needed.
+
+    async def fake_scrape(url, model_number="", allow_tier2=True):
+        if "/products/" in url:
+            return _result(url, "Anex AG-01 full specifications")
+        return _result(url, "53 results found for AG-01",
+                       links=["https://retailer.pk/products/anex-ag-01"])
+
+    monkeypatch.setattr(orchestrator, "smart_fetch", fake_scrape)
+
+    result = await orchestrator.scrape_product("Anex", "AG-01")
+
+    assert "failure" not in result
+    assert result["scraped_data"][0]["url"] == "https://retailer.pk/products/anex-ag-01"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_accepts_a_trusted_secondary_retailer_on_model_match_alone(monkeypatch):
+    """
+    The fast path's WooCommerce Store API hit goes through the exact same
+    trusted_secondary soft-accept as the search-pattern cascade: a retailer's
+    own product `name` field never says "Anex", only the model.
+    """
+    async def sources(_brand, _model, **_kw):
+        return [{"url": "https://retailer.pk/search?q=x", "source_type": "trusted_secondary",
+                 "domain": "retailer.pk", "scope_path": "/appliances"}]
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(orchestrator, "resolve_sources", sources)
+    monkeypatch.setattr(orchestrator, "remember_working_template", noop)
+
+    payload = [{
+        "name": "AG-10 Handy Chopper With 10 Functions", "sku": "AG-10",
+        "permalink": "https://retailer.pk/product/ag-10/",
+        "short_description": "Handy chopper.", "description": "", "is_in_stock": True,
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+    monkeypatch.setattr(orchestrator, "smart_fetch",
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("fast path should have hit")))
+
+    result = await orchestrator.scrape_product("Anex", "AG-10")
+
+    assert "failure" not in result
+    assert result["scraped_data"][0]["source_type"] == "trusted_secondary"

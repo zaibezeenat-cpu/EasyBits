@@ -62,6 +62,42 @@ def _clean_capacity(capacity: str) -> str:
     return re.sub(r"\s+", " ", capacity).strip()
 
 
+_EMPTY_BRACKETS_RE = re.compile(r"\(\s*\)|\[\s*\]")
+_MULTIPLE_SPACES_RE = re.compile(r" {2,}")
+_TRAILING_HYPHEN_RE = re.compile(r"[\s-]+$")
+_COMMA_RE = re.compile(r"\s*,\s*")
+
+
+def _sanitize_title(name: str) -> str:
+    """
+    Boss Rule Step 3 (owner-directed, 2026-08-10): format hygiene a title
+    must never violate, applied as a final deterministic pass regardless of
+    which inputs produced the string -- cheaper and more reliable than
+    trying to guarantee every individual input is already clean.
+
+    - Empty () / [] : never meaningful, only ever noise from a stripped-out
+      value upstream. Deliberately only EMPTY brackets -- a bracket with
+      real content inside it is a separate, not-yet-reported concern this
+      pass does not touch.
+    - Double spaces: collapsed to one.
+    - A trailing hyphen (with or without trailing whitespace): stripped --
+      a dangling "- " at the end reads as an unfinished title.
+    - Commas: replaced with a plain SPACE, not the word "and" (reviewed and
+      corrected 2026-08-10) -- Rank Math counts focus-keyword occurrences by
+      splitting on punctuation, so a comma inside the title can silently
+      break that count (Boss Rule #6). A space avoids two real problems
+      "and" would cause: several commas in one title ("Kitchen Robot,
+      Deluxe, 700W") would otherwise read as spammy repetition ("Kitchen
+      Robot and Deluxe and 700W"), and a category that already legitimately
+      contains "and" ("Grinder and Blender") would risk being doubled up.
+    """
+    name = _EMPTY_BRACKETS_RE.sub("", name)
+    name = _COMMA_RE.sub(" ", name)
+    name = _MULTIPLE_SPACES_RE.sub(" ", name).strip()
+    name = _TRAILING_HYPHEN_RE.sub("", name).strip()
+    return name
+
+
 def build_name(
     brand: str,
     capacity: str,
@@ -69,6 +105,7 @@ def build_name(
     product_type: str,
     features: list[str] | None = None,
     series: str | None = None,
+    wattage: str | None = None,
 ) -> str:
     """
     Builds the product title using the Boss Rule (updated 2026-07-22):
@@ -95,8 +132,20 @@ def build_name(
     rather than mixed into the feature list -- it is a proper noun and must not
     be dropped for length before the features are.
 
+    `wattage` (owner-directed, 2026-08-10) fills the SAME identity role as
+    `capacity` for small appliances whose defining spec is power draw, not
+    volume/tonnage (a food processor's "700W" plays the part "1 Ton" plays
+    for an AC) -- it sits in the same slot, right after capacity, and like
+    capacity is a CONFIRMED SPEC FACT rather than a harvested marketing word,
+    so it is never dropped for length the way a `features` entry can be.
+    Most categories have one of capacity or wattage, not both, but nothing
+    here assumes that -- if a product genuinely has both, both are kept.
+
     (An earlier draft appended features after a dash -- "... Air Conditioner -
-    Heat & Cool" -- which split the phrase and matched no real exported title.)
+    Heat & Cool" -- which split the phrase and matched no real exported title.
+    A later request to reintroduce a dash specifically for wattage was
+    reviewed and declined for the same reason -- wattage instead fills
+    capacity's existing slot rather than trailing after a dash.)
 
     Three hard constraints, all deliberate:
 
@@ -119,22 +168,40 @@ def build_name(
     # Identity + series form the part that is never dropped: the series is a
     # proper noun customers search by ("Luxury Ultra"), so it outranks generic
     # feature words when the name has to be shortened.
-    # Order is brand -> model -> capacity per the updated Boss Rule.
+    # Order is brand -> model -> capacity -> wattage per the updated Boss Rule.
     identity = [p for p in (brand, model, capacity) if p and p.strip()]
+    if wattage and wattage.strip():
+        identity.append(wattage.strip())
     if series and series.strip():
         identity.append(series.strip())
     product_type = (product_type or "").strip()
 
     verified_features = [f.strip() for f in (features or []) if f and f.strip()]
+    # Deduplication (owner-reviewed, 2026-08-10): a harvested title-term
+    # phrase could independently produce the same value wattage already
+    # occupies its own slot for (e.g. a scraped title literally contains
+    # "700W" as its own n-gram) -- without this, the assembled title would
+    # repeat it: "... 700W Deluxe 700W Kitchen Robot". Exact match only
+    # (case-insensitive): a feature merely CONTAINING the wattage string
+    # ("700W Turbo Motor") is left alone, since dropping the whole phrase
+    # over a partial match would lose real, verified information.
+    if wattage and wattage.strip():
+        wattage_key = wattage.strip().lower()
+        verified_features = [f for f in verified_features if f.lower() != wattage_key]
 
     # Longest first: keep as many feature words as fit before the product type.
+    # MAX_NAME_LENGTH is checked on the pre-sanitize join -- _sanitize_title
+    # only ever shrinks a string (collapsing spaces, stripping stray
+    # punctuation), never grows it, so checking before is the conservative,
+    # correct order: sanitizing first could hide a candidate that was
+    # actually over-length before cleanup.
     for count in range(len(verified_features), -1, -1):
         parts = identity + verified_features[:count] + ([product_type] if product_type else [])
         candidate = " ".join(parts).strip()
         if len(candidate) <= MAX_NAME_LENGTH or count == 0:
-            return candidate
+            return _sanitize_title(candidate)
 
-    return " ".join(identity + ([product_type] if product_type else [])).strip()
+    return _sanitize_title(" ".join(identity + ([product_type] if product_type else [])).strip())
 
 
 def expand_abbreviation(product_type: str) -> str:
@@ -145,6 +212,30 @@ def expand_abbreviation(product_type: str) -> str:
     than silently shipping an abbreviated title.
     """
     return _FORBIDDEN_ABBREVIATIONS.get(product_type.strip().lower(), product_type)
+
+
+def title_format_violation(name: str) -> str | None:
+    """
+    Returns a short description of the first Boss Rule Step 3 format
+    violation found in `name`, or None when it's clean.
+
+    Defense-in-depth (2026-08-10): `_sanitize_title()` above already
+    prevents these at build time, but a Product Name can also be edited by
+    hand after generation (the frontend allows this), so
+    app/graph/seo_validator.py calls this independently rather than trusting
+    the builder was the only path that ever produced the string -- the same
+    reason `contains_forbidden_abbreviation` exists as a validator-side
+    check alongside this module's own abbreviation avoidance.
+    """
+    if _EMPTY_BRACKETS_RE.search(name):
+        return "contains empty brackets () or []"
+    if _MULTIPLE_SPACES_RE.search(name):
+        return "contains a double space"
+    if _TRAILING_HYPHEN_RE.search(name):
+        return "ends with a trailing hyphen"
+    if "," in name:
+        return "contains a comma (breaks Rank Math's keyword counting)"
+    return None
 
 
 def contains_forbidden_abbreviation(name: str) -> str | None:

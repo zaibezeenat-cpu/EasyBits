@@ -23,12 +23,19 @@ class PipelineState(BaseModel):
     # source using it AND to match a confirmed spec fact for this product
     # (title_terms.py::verify_terms) to actually reach the title.
     competitor_titles: list[str] = []
-    # The subset of the SAME titles that came from an official brand source
-    # specifically (source_type == "official"), kept separately so
-    # harvest_title_terms can trust a brand's own wording (e.g. "Deluxe")
-    # without requiring a second seller to repeat it or the word to appear in
-    # extracted specs -- see title_terms.py's `official_titles` param.
-    official_titles: list[str] = []
+    # The subset of the SAME titles that came from a TRUSTED source --
+    # official OR trusted_secondary (2026-08-10, widened from official-only:
+    # owner-reported "Handy"/"Deluxe" missing from titles built from the
+    # same 1 official + 1 trusted_secondary source already being scraped,
+    # per the owner's explicit "no extra scraping" scope) -- kept separately
+    # so harvest_title_terms can trust this wording (e.g. "Deluxe") without
+    # requiring a second seller to repeat it or the word to appear in
+    # extracted specs. `web` (unvetted) sources are deliberately excluded
+    # and still need a matching spec fact -- see title_terms.py's
+    # `trusted_titles` param and _brand_identity_ok's identical trust-tier
+    # reasoning (orchestrator.py) for why official+trusted_secondary but not
+    # web is the right line here.
+    trusted_titles: list[str] = []
     extraction: ExtractionResult | None = None
     selected_template_type: Literal["A", "B"] = "A"
     writer_output: WriterOutput | None = None

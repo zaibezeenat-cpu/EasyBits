@@ -1,7 +1,7 @@
 import math
 import re
 
-from app.builders.name_builder import contains_forbidden_abbreviation
+from app.builders.name_builder import contains_forbidden_abbreviation, title_format_violation
 from app.builders.seo_compliance import count_keyword_occurrences
 from app.builders.seo_title_builder import (
     seo_title_contains_focus_keyword,
@@ -138,6 +138,20 @@ def validate_seo_rules(
             f"product type instead."
             if abbreviation else
             "Product name uses the full product type."
+        )
+    ))
+
+    # Boss Rule Step 3 (2026-08-10): format hygiene, checked independently of
+    # name_builder.py's own _sanitize_title() -- see title_format_violation's
+    # docstring for why this is a second gate, not a redundant one.
+    format_violation = title_format_violation(product_name)
+    results.append(SeoCheckResult(
+        check_name="product_name_format_hygiene",
+        passed=format_violation is None,
+        detail=(
+            f"Product name {format_violation}."
+            if format_violation else
+            "Product name has no empty brackets, double spaces, trailing hyphen, or commas."
         )
     ))
 

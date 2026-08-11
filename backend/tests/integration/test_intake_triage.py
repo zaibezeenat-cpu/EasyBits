@@ -37,7 +37,7 @@ async def test_intake_triage_simple_product():
     mock_brand_repo = MagicMock()
     # V8.0 Production Lock: brand casing must exactly match live taxonomy, so
     # the mocked brand's .name must equal raw_input.brand_name here.
-    mock_brand_repo.get_by_name = AsyncMock(return_value=_mock_brand("B1"))
+    mock_brand_repo.get_by_name_ci = AsyncMock(return_value=_mock_brand("B1"))
 
     mock_cat_repo = MagicMock()
     mock_cat_repo.get_by_name = AsyncMock(return_value=MagicMock(id=uuid4()))
@@ -73,7 +73,7 @@ async def test_intake_triage_variant_detection():
 
     # Patch repos to return valid mocks so it doesn't fail on lookup
     mock_brand_repo = MagicMock()
-    mock_brand_repo.get_by_name = AsyncMock(return_value=_mock_brand("B1"))
+    mock_brand_repo.get_by_name_ci = AsyncMock(return_value=_mock_brand("B1"))
 
     mock_cat_repo = MagicMock()
     mock_cat_repo.get_by_name = AsyncMock(return_value=MagicMock(id=uuid4()))
@@ -110,7 +110,7 @@ async def test_intake_triage_brand_casing_mismatch_blocks():
     )
 
     mock_brand_repo = MagicMock()
-    mock_brand_repo.get_by_name = AsyncMock(return_value=_mock_brand("DAWLANCE"))
+    mock_brand_repo.get_by_name_ci = AsyncMock(return_value=_mock_brand("DAWLANCE"))
 
     mock_cat_repo = MagicMock()
     mock_cat_repo.get_by_name = AsyncMock(return_value=MagicMock(id=uuid4()))

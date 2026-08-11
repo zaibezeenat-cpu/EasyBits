@@ -167,3 +167,41 @@ def test_url_alone_is_enough_when_the_title_is_unhelpful():
 
 def test_empty_brand_never_silently_matches():
     assert brand_matches_identity("", "https://x.pk/product/anything", ["Anything"]) is False
+
+
+# --- Brand identity: the hostname itself is proof on a dedicated domain -----
+#
+# Owner-reported (2026-08-10, live): a real Anex official-site product's own
+# title is "AG-10 Handy Chopper With 10 Functions" -- the word "Anex" never
+# appears in the title OR the URL slug, which the pre-existing check alone
+# rejects. But the DOMAIN itself already proves the brand (anex.pk literally
+# contains "anex") -- a signal the old code discarded entirely, since it only
+# ever tokenised urlparse(url).path, never .netloc.
+
+
+def test_domain_alone_proves_brand_when_the_title_never_says_it():
+    """The exact real-world shape: no brand word anywhere in title or slug."""
+    assert brand_matches_identity(
+        "Anex", "https://www.anex.pk/products/ag-10-handy-chopper-with-10-functions",
+        ["AG-10 Handy Chopper With 10 Functions"],
+    ) is True
+
+
+def test_generic_subdomain_prefix_is_not_mistaken_for_a_brand_token():
+    """"www" must not leak into candidates as if it were a meaningful word --
+    harmless either way against the subset check, but a real host is still
+    the actual assertion here: a plain www./store. prefix over a brand's own
+    domain still resolves as that brand."""
+    assert brand_matches_identity(
+        "Anex", "https://store.anex.pk/products/ag-10-handy-chopper",
+        ["AG-10 Handy Chopper"],
+    ) is True
+
+
+def test_hostname_does_not_rescue_a_genuinely_wrong_brand():
+    """The EcoStar/Gree shared-host guard must still hold: dwphome.pk names
+    neither brand, so the hostname signal contributes nothing there and the
+    existing title-based rejection is unaffected."""
+    ecostar_url = "https://dwphome.pk/product/ecostar-ario-max-series-1-ton-split-ac-439435"
+    ecostar_title = ["EcoStar Ario MAX Series 1 TON Split AC -"]
+    assert brand_matches_identity("Gree", ecostar_url, ecostar_title) is False
