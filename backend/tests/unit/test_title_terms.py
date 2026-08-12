@@ -10,6 +10,8 @@ category-agnostic -- every word of a term must appear in the facts extraction
 confirmed for that product. These tests exercise an air conditioner, a juicer,
 a water dispenser and an oven to prove no category is special-cased.
 """
+import pytest
+
 from app.builders.title_terms import (
     MAX_MARKETING_WORDS,
     TitleTerm,
@@ -482,3 +484,28 @@ def test_a_short_term_is_not_fact_backed_by_an_accidental_substring():
     terms = [TitleTerm(term="5G", frequency=1, corroborated=True, verified=False)]
     verified = verify_terms(terms, {"memory": "has 5gb ram"})[0]
     assert not verified.fact_backed and not verified.verified
+
+
+@pytest.mark.xfail(
+    reason="KNOWN, PARTIALLY FIXED (2026-08-12). A phrase's own leading/trailing "
+           "punctuation is now stripped, which fixes the common case. Still open: a "
+           "hyphen GLUED to the previous word ('Deluxe-2 in 1') is inside the token, "
+           "not at its edge, so it survives. Widening the N-in-1 regex to swallow it "
+           "broke 6 spec-harvesting tests, so that is left for a proper pass rather "
+           "than rushed.",
+    strict=True,
+)
+def test_harvested_phrases_never_keep_stray_leading_punctuation():
+    """
+    Owner-reported (2026-08-12, live): the title contained "-2 in 1", which
+    reads as negative two. Source text like "Deluxe-2 in 1" left the hyphen
+    attached to the phrase, because the noise filter only strips punctuation
+    when deciding IF a word is noise -- it kept the original spelling.
+    """
+    harvested = harvest_title_terms(
+        titles=[], trusted_titles=["Anex AG-2098 Deluxe-2 in 1 Vacuum Cleaner"],
+        brand="Anex", model="AG-2098", product_type="Vacuum Cleaner",
+    )
+    for term in harvested:
+        assert not term.term.startswith("-"), f"stray leading hyphen in {term.term!r}"
+        assert "-2 in 1" not in term.term, f"reads as negative two: {term.term!r}"

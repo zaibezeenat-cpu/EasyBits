@@ -205,6 +205,15 @@ def build_name(
         spec_key = dash_spec.lower()
         verified_features = [f for f in verified_features if f.lower() != spec_key]
 
+    # Same guard for the series, which occupies its own identity slot above.
+    # Owner-reported (2026-08-12, live CSV): the exported title read "Anex
+    # AG-2098 Deluxe Deluxe -2 in 1 Vacuum Cleaner - 1500W" -- "Deluxe"
+    # arrived twice, once as the extracted `series` and once as a harvested
+    # feature term, with nothing deduplicating the two against each other.
+    if series and series.strip():
+        series_key = series.strip().lower()
+        verified_features = [f for f in verified_features if f.lower() != series_key]
+
     # The trailing spec is part of the length budget but is never itself
     # dropped -- it is confirmed data, so features give way to it, not the
     # other way round.

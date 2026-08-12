@@ -227,7 +227,12 @@ def _phrases_in_title(
                 runs.append(run)
                 run = []
         else:
-            run.append(word)
+            # Append the CLEANED word, not the raw one. Stripping only decided
+            # whether it was noise before -- the original spelling was kept, so
+            # source text like "Deluxe-2 in 1" carried its hyphen into the
+            # phrase and the exported title read "-2 in 1", which scans as
+            # negative two (owner-reported, 2026-08-12).
+            run.append(word.strip("-&"))
 
     # Emit every 1-to-4-word sub-phrase, not just whole runs. Sellers order and
     # pad their titles differently ("EZ Glass Door Bottom Load" vs "Glass Door

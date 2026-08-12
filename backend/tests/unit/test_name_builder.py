@@ -302,3 +302,16 @@ def test_a_category_name_that_legitimately_contains_and_is_untouched():
     sanitizer output -- must not be mangled."""
     name = build_name("Anex", "", "AG-1", "Grinder and Blender")
     assert "Grinder and Blender" in name
+
+
+def test_series_is_not_repeated_when_it_is_also_a_harvested_feature():
+    """
+    Owner-reported (2026-08-12, live CSV): the exported title read "Anex
+    AG-2098 Deluxe Deluxe -2 in 1 Vacuum Cleaner - 1500W". "Deluxe" arrived
+    twice -- once as the extracted `series` and once as a harvested feature
+    term -- and nothing deduplicated the two against each other.
+    """
+    name = build_name("Anex", "", "AG-2098", "Vacuum Cleaner",
+                      series="Deluxe", features=["Deluxe", "2 in 1"], wattage="1500W")
+    assert name.lower().count("deluxe") == 1
+    assert name == "Anex AG-2098 Deluxe 2 in 1 Vacuum Cleaner - 1500W"
