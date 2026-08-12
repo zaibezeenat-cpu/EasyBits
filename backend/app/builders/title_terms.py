@@ -172,7 +172,31 @@ def _protect_n_in_one(text: str) -> tuple[str, dict[str, str]]:
         restore[token] = f"{match.group(1)} in 1"
         return token
 
-    return _N_IN_ONE_RE.sub(_swap, text or ""), restore
+    protected = _N_IN_ONE_RE.sub(_swap, text or "")
+
+    if restore:
+        # A hyphen GLUED to the previous word ("Deluxe-2 in 1") survives the
+        # substitution above untouched: _N_IN_ONE_RE's own \b starts matching
+        # AT the digit, correctly, so the hyphen is simply text the regex
+        # never looked at, and it ends up sitting directly against the new
+        # sentinel token ("Deluxe-ninonetoken0"). Left alone, the noise
+        # filter only strips punctuation from the OUTER edges of a word, this
+        # hyphen is internal to it, and restoration below reproduces the
+        # exact "Deluxe-2 in 1" bug (owner-reported, 2026-08-12).
+        #
+        # Fixed here, not by widening _N_IN_ONE_RE itself: that regex is
+        # shared with _spec_feature_patterns(), which scans raw spec prose
+        # for the same pattern -- changing its shape there broke six
+        # spec-harvesting tests in an earlier attempt. This instead treats a
+        # hyphen touching a token THIS CALL just created as the word
+        # separator it visually reads as, splitting "Deluxe-ninonetoken0"
+        # into "Deluxe" and "ninonetoken0" the same way a plain space would
+        # -- exactly how the already-working "Deluxe 2 in 1" case behaves.
+        token_pattern = "|".join(re.escape(token) for token in restore)
+        protected = re.sub(rf"-(?=(?:{token_pattern})\b)", " ", protected)
+        protected = re.sub(rf"(?<=\b(?:{token_pattern}))-", " ", protected)
+
+    return protected, restore
 
 
 def _restore_n_in_one(phrase: str, restore: dict[str, str]) -> str:
