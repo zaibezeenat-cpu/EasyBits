@@ -146,13 +146,23 @@ async def test_non_http_official_url_is_not_fetched_ssrf_guard(monkeypatch):
 # --- extractor_node mode logic ---------------------------------------------
 
 @pytest.mark.asyncio
-async def test_strict_with_nothing_provided_proceeds_with_zero_grounding_but_never_discovers(monkeypatch):
+async def test_strict_with_nothing_provided_falls_back_to_discovery(monkeypatch):
     """
-    2026-08-09 (owner-directed): strict provided-source mode with nothing
-    supplied no longer escalates -- it proceeds with an empty source list
-    (every field UNKNOWN, rendered "Not Available" downstream). Strict mode's
-    real guarantee -- it must NEVER fall back to discovery -- is unchanged and
-    still asserted here.
+    REVERSED 2026-08-12 (owner-reported live bug), and deliberately so.
+
+    The 2026-08-09 rule was "strict must NEVER fall back to discovery", which
+    is right while an operator source EXISTS to be strict about. With the
+    sheet's Website Link column blank it instead meant "use no sources at
+    all": the product shipped with zero grounding, every spec "Not
+    Available", and NOT ONE fetch even attempted -- silently bypassing
+    discovery, the platform-JSON fast path and every downstream title/spec
+    guarantee, with no error explaining why.
+
+    Strict's real guarantee is narrower than the old test claimed: when the
+    operator DID supply a source, discovery must never run
+    (test_strict_with_details_uses_only_operator_source, unchanged, still
+    asserts exactly that). When they supplied nothing, there is nothing to be
+    strict about and discovery is the only way the product gets any facts.
     """
     monkeypatch.setattr(nodes.settings_repo, "get_setting", AsyncMock(return_value="strict"))
     scrape = AsyncMock()
@@ -162,11 +172,12 @@ async def test_strict_with_nothing_provided_proceeds_with_zero_grounding_but_nev
     )
     monkeypatch.setattr(nodes.llm_provider, "call", AsyncMock(return_value=empty_extraction))
 
+    scrape.return_value = {"scraped_data": []}
     result = await extractor_or_state(monkeypatch, _state(category_schema=_schema()))
 
     assert not result.get("manual_review_required", False)
     assert "extraction" in result
-    scrape.assert_not_called()
+    scrape.assert_called()
 
 
 @pytest.mark.asyncio

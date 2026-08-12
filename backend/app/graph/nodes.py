@@ -199,8 +199,18 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
     # discovery to cross-check; "strict" uses ONLY the operator source.
     mode = (await settings_repo.get_setting("provided_source_mode")) or "augment"
 
-    if mode == "strict":
+    if mode == "strict" and operator_docs:
         # Strict: no discovery at all -- trust only what the operator supplied.
+        #
+        # `and operator_docs` (2026-08-12, owner-reported live bug): strict is
+        # only meaningful while there IS an operator source to be strict
+        # about. With the sheet's Website Link column blank it silently meant
+        # "use no sources at all" -- the product shipped with zero grounding,
+        # every spec "Not Available", and NOT ONE fetch even attempted, so
+        # discovery, the platform-JSON fast path and every downstream title/
+        # spec guarantee were bypassed without any error to explain why.
+        # Strict now means "trust the operator's source EXCLUSIVELY when one
+        # exists", never "ship blind when one doesn't".
         scraped = {"scraped_data": operator_docs}
     else:
         # Augment: operator source(s) PLUS discovery. PASS 1 is FREE tiers only
