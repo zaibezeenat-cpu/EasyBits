@@ -7,7 +7,7 @@ import pytest
 
 from app.graph.nodes import duplicate_sku_guard_node, extractor_node
 from app.graph.state import PipelineState
-from app.models.extraction import ExtractionResult
+from app.models.extraction import ExtractionResult, SourceCitation
 from app.models.failure import FailureInfo
 from app.models.raw_input import RawProductInput
 from app.models.taxonomy import CategorySpecSchema, SpecField
@@ -102,6 +102,177 @@ async def test_extractor_node_no_urls_proceeds_with_zero_grounding():
     assert not result.get("manual_review_required", False)
     assert "failure" not in result
     assert result["extraction"].confirmed_value("capacity") is None
+
+
+@pytest.mark.asyncio
+async def test_extractor_node_always_confirms_brand_and_model_from_the_input_sheet():
+    """
+    Owner-reported (2026-08-12, live): a real product (AG-2098) showed
+    brand and model_number as "Not Available" even though both are typed
+    directly on the input sheet -- because scraping found nothing to
+    corroborate them, and the Extractor LLM (correctly, per its
+    no-hallucination contract) only cites what a SOURCE states.
+
+    A previous fix (reviewer_node) papered over this for the Reviewer's own
+    fact-check prompt only, by patching a local `facts` dict that nothing
+    else ever reads. This is the real fix: inject brand/model_number as
+    confirmed citations directly into the ExtractionResult itself, so
+    confirmed_value("brand")/("model_number") is correct EVERYWHERE it's
+    read -- the specs table, any diagnostic script, the Reviewer, all of it
+    -- not just one prompt.
+
+    source_type="user_estimate" (the lowest trust tier) so this only fills
+    a gap -- it must never be able to outrank a genuinely scraped, higher-
+    trust citation that disagrees with it.
+    """
+    now = datetime.now(UTC)
+    schema = CategorySpecSchema(
+        id=uuid4(), category_id=uuid4(),
+        fields=[SpecField(key="capacity", label="Capacity", required=True)],
+        created_at=now, updated_at=now,
+    )
+    state = PipelineState(
+        product_id=uuid4(), batch_id=uuid4(),
+        raw_input=RawProductInput(
+            sku="AG-2098", model_number="AG-2098", brand_name="Anex",
+            category_name="Vacuum Cleaner", product_type="Vacuum Cleaner",
+            regular_price=Decimal(28475), sale_price=Decimal(28475),
+        ),
+        category_schema=schema,
+    )
+    # Nothing scraped ever states brand/model -- the exact reported shape.
+    empty_extraction = ExtractionResult(product_id="p1", category_key="c1", citations=[])
+    scraped = {"scraped_data": [{
+        "url": "https://anex.pk/ag-2098", "source_type": "official",
+        "content": "Deluxe 2 in 1 vacuum cleaner, 1500W motor.",
+        "candidate_titles": ["Anex AG-2098 Deluxe Vacuum Cleaner"],
+    }]}
+
+    with patch("app.graph.nodes.scrape_product", AsyncMock(return_value=scraped)), \
+         patch("app.graph.nodes.settings_repo.get_setting", AsyncMock(return_value=None)), \
+         patch("app.graph.nodes.llm_provider.call", AsyncMock(return_value=empty_extraction)):
+        result = await extractor_node(state)
+
+    extraction = result["extraction"]
+    assert extraction.confirmed_value("brand") == "Anex"
+    assert extraction.confirmed_value("model_number") == "AG-2098"
+    # Never upgraded to a higher trust tier -- it's a fallback, not a claim
+    # of independent verification.
+    brand_citation = next(c for c in extraction.citations if c.field_name == "brand")
+    assert brand_citation.source_type == "user_estimate"
+
+
+@pytest.mark.asyncio
+async def test_a_genuinely_scraped_brand_still_wins_over_the_operator_fallback():
+    """
+    The injected citation must never outrank a REAL, higher-trust citation
+    the Extractor actually found -- it only fills a gap when nothing else
+    confirmed the field.
+
+    Review-flagged (2026-08-12): the first version of this test used the
+    SAME value on both sides ("Anex" operator vs "Anex" scraped), so it
+    would have passed trivially even if the tier logic were broken (e.g.
+    if _operator_identity_citations mistakenly emitted source_type=
+    "official"). The scraped value here is deliberately DIFFERENT from the
+    operator's input, so the assertion can only pass if the tier ranking is
+    genuinely correct.
+    """
+    now = datetime.now(UTC)
+    schema = CategorySpecSchema(
+        id=uuid4(), category_id=uuid4(),
+        fields=[SpecField(key="capacity", label="Capacity", required=True)],
+        created_at=now, updated_at=now,
+    )
+    state = PipelineState(
+        product_id=uuid4(), batch_id=uuid4(),
+        raw_input=RawProductInput(
+            # Deliberately a typo/stale value on the input sheet -- the
+            # official site is the ground truth when the two disagree.
+            sku="AG-2098", model_number="AG-2098", brand_name="Anex Pakistan",
+            category_name="Vacuum Cleaner", product_type="Vacuum Cleaner",
+            regular_price=Decimal(28475), sale_price=Decimal(28475),
+        ),
+        category_schema=schema,
+    )
+    scraped_extraction = ExtractionResult(
+        product_id="p1", category_key="c1",
+        citations=[SourceCitation(
+            field_name="brand", value="Anex", source_url="https://anex.pk/ag-2098",
+            source_type="official", confidence="confirmed", fetched_at=now,
+        )],
+    )
+    scraped = {"scraped_data": [{
+        "url": "https://anex.pk/ag-2098", "source_type": "official",
+        "content": "Anex AG-2098", "candidate_titles": [],
+    }]}
+
+    with patch("app.graph.nodes.scrape_product", AsyncMock(return_value=scraped)), \
+         patch("app.graph.nodes.settings_repo.get_setting", AsyncMock(return_value=None)), \
+         patch("app.graph.nodes.llm_provider.call", AsyncMock(return_value=scraped_extraction)):
+        result = await extractor_node(state)
+
+    extraction = result["extraction"]
+    assert extraction.confirmed_value("brand") == "Anex", (
+        "the scraped official value must win over the operator's differing input"
+    )
+    brand_citations = [c for c in extraction.citations if c.field_name == "brand"]
+    assert any(c.source_type == "official" and c.value == "Anex" for c in brand_citations)
+    assert any(c.source_type == "user_estimate" and c.value == "Anex Pakistan" for c in brand_citations), (
+        "the operator's citation must still be PRESENT (for QA visibility), just not winning"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pass_2_widening_does_not_duplicate_the_operator_citations():
+    """
+    The operator citations are injected after BOTH the initial and the
+    Google-tier pass-2 extraction call -- confirms this doesn't duplicate
+    them, since `extraction` is REASSIGNED (not appended to) at the pass-2
+    call site, discarding the first call's injected citations along with
+    the rest of that object.
+    """
+    now = datetime.now(UTC)
+    schema = CategorySpecSchema(
+        id=uuid4(), category_id=uuid4(),
+        fields=[SpecField(key="capacity", label="Capacity", required=True)],
+        created_at=now, updated_at=now,
+    )
+    state = PipelineState(
+        product_id=uuid4(), batch_id=uuid4(),
+        raw_input=RawProductInput(
+            sku="AG-2098", model_number="AG-2098", brand_name="Anex",
+            category_name="Vacuum Cleaner", product_type="Vacuum Cleaner",
+            regular_price=Decimal(28475), sale_price=Decimal(28475),
+        ),
+        category_schema=schema,
+    )
+    # First call finds nothing for capacity (triggers pass-2 widening);
+    # second call (after Google-tier widening) finds it.
+    first_pass = ExtractionResult(product_id="p1", category_key="c1", citations=[])
+    second_pass = ExtractionResult(
+        product_id="p1", category_key="c1",
+        citations=[SourceCitation(
+            field_name="capacity", value="5L", source_url="https://anex.pk/ag-2098",
+            source_type="official", confidence="confirmed", fetched_at=now,
+        )],
+    )
+    scraped = {"scraped_data": [{
+        "url": "https://anex.pk/ag-2098", "source_type": "official",
+        "content": "x", "candidate_titles": [],
+    }]}
+
+    with patch("app.graph.nodes.scrape_product", AsyncMock(return_value=scraped)), \
+         patch("app.graph.nodes.settings_repo.get_setting", AsyncMock(return_value=None)), \
+         patch("app.graph.nodes.google_search_client.api_key", "test-key"), \
+         patch("app.graph.nodes.google_search_client.cx", "test-cx"), \
+         patch("app.graph.nodes.llm_provider.call", AsyncMock(side_effect=[first_pass, second_pass])):
+        result = await extractor_node(state)
+
+    extraction = result["extraction"]
+    brand_citations = [c for c in extraction.citations if c.field_name == "brand"]
+    model_citations = [c for c in extraction.citations if c.field_name == "model_number"]
+    assert len(brand_citations) == 1, f"expected exactly 1 brand citation, got {len(brand_citations)}"
+    assert len(model_citations) == 1, f"expected exactly 1 model_number citation, got {len(model_citations)}"
 
 
 @pytest.mark.asyncio

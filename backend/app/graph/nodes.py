@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from app.agents.extractor import EXTRACTOR_SYSTEM_PROMPT
@@ -48,7 +49,7 @@ from app.db.repositories.taxonomy import taxonomy_repo
 from app.db.repositories.warranty import warranty_repo
 from app.graph.seo_validator import expected_meta_cta, minimum_body_words, validate_seo_rules
 from app.graph.state import PipelineState
-from app.models.extraction import ExtractionResult
+from app.models.extraction import ExtractionResult, SourceCitation
 from app.models.failure import FailureInfo
 from app.models.raw_input import RawProductInput
 from app.models.review_result import ReviewResult
@@ -60,6 +61,44 @@ from app.scraping.playwright_client import _clean_html_to_text, is_block_page
 from app.scraping.source_discovery import FREE_TIERS, GOOGLE_TIER
 
 logger = logging.getLogger(__name__)
+
+
+def _operator_identity_citations(raw: RawProductInput) -> list[SourceCitation]:
+    """
+    brand and model_number as OPERATOR-provided facts, always confirmed.
+
+    Owner-reported (2026-08-12, live): a real product (AG-2098) showed
+    brand and model_number as "Not Available" -- scraping found nothing to
+    corroborate them, so the Extractor (correctly, per its no-hallucination
+    contract) never cited them, even though both are typed directly on the
+    input sheet and already validated before extraction ever runs (the
+    Brand Casing Lock in intake_triage; model_number is what DRIVES the
+    scrape in the first place). A previous fix patched a local `facts`
+    dict inside reviewer_node for the Reviewer's OWN prompt only -- nothing
+    else ever read it. Injected here directly into the ExtractionResult's
+    citations instead, so confirmed_value("brand")/("model_number") is
+    correct EVERYWHERE it's read: the specs table, any diagnostic script,
+    the Reviewer, all of it.
+
+    source_type="user_estimate" -- the LOWEST trust tier
+    (fact_corroboration._TIER_RANK) -- so this only fills a gap: a
+    genuinely scraped, higher-trust citation for the same field always
+    still wins the corroboration ranking if one exists, agreeing or not.
+    This is a fallback, never an override.
+    """
+    now = datetime.now(UTC)
+    citations: list[SourceCitation] = []
+    if raw.brand_name:
+        citations.append(SourceCitation(
+            field_name="brand", value=raw.brand_name, source_url="operator-provided",
+            source_type="user_estimate", confidence="confirmed", fetched_at=now,
+        ))
+    if raw.model_number:
+        citations.append(SourceCitation(
+            field_name="model_number", value=raw.model_number, source_url="operator-provided",
+            source_type="user_estimate", confidence="confirmed", fetched_at=now,
+        ))
+    return citations
 
 # 2026-08-12 (owner-reported, live): a product shipped 4 words under its
 # real floor after 5 Writer/Reviewer retries. LLMs reliably undershoot a
@@ -311,6 +350,9 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
             human_prompt=human_prompt,
             response_model=ExtractionResult
         )
+        # See _operator_identity_citations: brand/model_number are always
+        # confirmed from the input sheet, independent of what scraping found.
+        extraction.citations.extend(_operator_identity_citations(state.raw_input))
 
         # BUG FIX (Phase 3 integration test): after_extractor_router already
         # escalates when fields are missing/conflicting, but a router can only
@@ -354,6 +396,7 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
                     human_prompt=human_prompt,
                     response_model=ExtractionResult,
                 )
+                extraction.citations.extend(_operator_identity_citations(state.raw_input))
                 scraped["scraped_data"] = combined
                 missing = extraction.missing_required_fields(state.category_schema)
                 uncorroborated = extraction.uncorroborated_required_fields(state.category_schema)
