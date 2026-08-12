@@ -46,7 +46,11 @@ from app.db.repositories.settings import settings_repo
 from app.db.repositories.sources import sources_repo
 from app.db.repositories.taxonomy import taxonomy_repo
 from app.db.repositories.warranty import warranty_repo
-from app.graph.seo_validator import expected_meta_cta, validate_seo_rules
+from app.graph.seo_validator import (
+    expected_meta_cta,
+    minimum_body_words,
+    validate_seo_rules,
+)
 from app.graph.state import PipelineState
 from app.models.extraction import ExtractionResult
 from app.models.failure import FailureInfo
@@ -660,12 +664,24 @@ async def writer_node(state: PipelineState) -> dict[str, Any]:
         # often it repeats the (long) focus keyword, so cap it in code -- keep the
         # first few occurrences (Rank Math needs >= 3) and replace the surplus with
         # the model number (a natural short form) so density stays under 2.5%.
+        #
+        # min_words is the SAME floor content_length_minimum will grade against
+        # (minimum_body_words, computed from this attempt's own LSI count) --
+        # without it, replacing a multi-word focus keyword with the bare model
+        # number is a net word loss that can shrink already-compliant content
+        # below the floor after the Writer is done, which is how "Body content
+        # is 276 words (floor is 280)" survived 5 exhausted attempts
+        # (owner-reported, 2026-08-12).
         writer_output = enforce_keyword_density(
             writer_output,
             focus_keyword,
             replacement=state.raw_input.model_number,
             secondary_keyword=secondary_type_keyword,
-            lsi_keywords=list(writer_output.lsi_keywords)
+            lsi_keywords=list(writer_output.lsi_keywords),
+            min_words=minimum_body_words(
+                lsi_count=len([k for k in writer_output.lsi_keywords if k.strip()]),
+                has_secondary=bool(secondary_type_keyword.strip()),
+            ),
         )
 
         # SEO title stays the FULL descriptive Product Name + power word (not the

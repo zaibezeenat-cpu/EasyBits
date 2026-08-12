@@ -86,6 +86,100 @@ def test_present_lsi_keywords_leave_body_unchanged():
     assert out.hero_paragraph == before  # nothing to add
 
 
+# ---------------------------------------------------------------------------
+# THE WORD-COUNT FLOOR MUST SURVIVE DENSITY ENFORCEMENT.
+#
+# Root cause of "Writer/Reviewer exhausted 5 attempts ... Body content is 276
+# words (floor is 280)" (owner-reported, 2026-08-12): enforce_keyword_density
+# replaces a MULTI-WORD focus keyword ("WestPoint Pakistan WF-6807 Hair
+# Straightener", 5 words) with a short replacement ("WF-6807", 1 word) --
+# every swap is a net loss of words. This runs in writer_node AFTER the
+# Writer's turn and BEFORE the Reviewer measures content_length_minimum, so
+# content the Writer wrote long enough can be shrunk below the floor by this
+# deterministic guard on every single attempt -- the Reviewer then blames the
+# Writer for content it never actually produced, and no number of retries
+# fixes a shrinkage that happens after the Writer is done.
+# ---------------------------------------------------------------------------
+
+
+def test_density_enforcement_never_shrinks_the_body_below_the_given_floor():
+    wo = _wo()
+    body_words_before = sum(len(s.split()) for s in _segments(wo))
+    before_occ, before_density = _occ_density(wo)
+    assert before_density > 0.025, "fixture must start over the ceiling"
+
+    # A floor a little below what the Writer wrote -- exactly the "barely
+    # cleared it" shape the real bug report shows (276 vs a floor of 280).
+    min_words = body_words_before - 2
+
+    out = enforce_keyword_density(
+        wo, FK, replacement="WF-6807", max_density=0.025, min_words=min_words,
+    )
+    body_words_after = sum(len(s.split()) for s in _segments(out))
+    assert body_words_after >= min_words, (
+        f"density enforcement shrank the body from {body_words_before} to "
+        f"{body_words_after} words, below the {min_words}-word floor it was "
+        f"told to respect"
+    )
+
+
+def test_density_enforcement_without_a_floor_behaves_as_before():
+    """min_words is optional -- omitting it must not change existing behavior
+    (backward compatible with every caller that predates the floor guard)."""
+    out_no_floor = enforce_keyword_density(_wo(), FK, replacement="WF-6807", max_density=0.025)
+    out_none_floor = enforce_keyword_density(
+        _wo(), FK, replacement="WF-6807", max_density=0.025, min_words=None,
+    )
+    assert _occ_density(out_no_floor) == _occ_density(out_none_floor)
+
+
+def test_floor_takes_priority_over_density_when_both_cannot_be_satisfied():
+    """
+    The intentional tradeoff, made explicit (2026-08-12, review-flagged): a
+    body already right AT the length floor, with the keyword repeated far
+    more than density allows, cannot satisfy both constraints at once --
+    removing enough occurrences to fix density would shrink the body below
+    the floor. The floor wins: thin content is the harder failure, and the
+    Writer can act on "keyword appears too often" next attempt in a way it
+    cannot act on a shrinkage that happens after its turn is already over.
+    A density check staying red here is expected and acceptable -- it still
+    produces a specific, actionable Reviewer message next attempt, rather
+    than a silently under-floor product.
+    """
+    fk = "Anex AG-2098"
+    wo = WriterOutput(
+        hero_heading=f"{fk} Overview",
+        hero_paragraph=(
+            f"{fk} is great. {fk} works well. {fk} lasts long. "
+            f"{fk} is efficient. {fk} is safe. {fk} is quiet."
+        ),
+        feature_headings=["Build"],
+        feature_texts=["Plain feature text with a handful of ordinary words in it."],
+        features_bullets=["Plain bullet with a few words"],
+        faqs=[FAQPair(question=f"Q{i}?", answer="Plain answer with a few words.") for i in range(4)]
+        + [FAQPair(question="What is the official warranty?", answer="2 Years Warranty.")],
+        short_desc_feature_1="a", short_desc_feature_2="b", short_desc_feature_3="c",
+        rank_math_description="d" * 152,
+        lsi_keywords=["plain feature", "ordinary words"], alt_text_1=fk, alt_text_2=fk, alt_text_3=fk,
+    )
+    body_words = sum(len(s.split()) for s in _segments(wo))
+    occ_before = " ".join(_segments(wo)).lower().count(fk.lower())
+    density_before = occ_before / body_words
+    assert density_before > 0.025, "fixture must start heavily over the ceiling"
+
+    min_words = body_words  # zero slack: any shrinkage at all breaches the floor
+
+    out = enforce_keyword_density(
+        wo, fk, replacement="AG-2098", max_density=0.025, min_words=min_words,
+    )
+    body_words_after = sum(len(s.split()) for s in _segments(out))
+    assert body_words_after >= min_words, (
+        "the floor must win over the density ceiling when both cannot be "
+        f"satisfied at once, got {body_words_after} words against a "
+        f"{min_words}-word floor"
+    )
+
+
 def test_already_compliant_content_is_unchanged():
     lean = _wo(
         hero_heading=f"{FK} Overview",
