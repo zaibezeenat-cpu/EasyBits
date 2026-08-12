@@ -486,15 +486,6 @@ def test_a_short_term_is_not_fact_backed_by_an_accidental_substring():
     assert not verified.fact_backed and not verified.verified
 
 
-@pytest.mark.xfail(
-    reason="KNOWN, PARTIALLY FIXED (2026-08-12). A phrase's own leading/trailing "
-           "punctuation is now stripped, which fixes the common case. Still open: a "
-           "hyphen GLUED to the previous word ('Deluxe-2 in 1') is inside the token, "
-           "not at its edge, so it survives. Widening the N-in-1 regex to swallow it "
-           "broke 6 spec-harvesting tests, so that is left for a proper pass rather "
-           "than rushed.",
-    strict=True,
-)
 def test_harvested_phrases_never_keep_stray_leading_punctuation():
     """
     Owner-reported (2026-08-12, live): the title contained "-2 in 1", which

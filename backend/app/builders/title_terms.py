@@ -153,7 +153,17 @@ def _tokens_to_drop(
 # "5 IN 1", "3In1", "3 - in - 1" -- so the same feature can never reach a
 # title written two different ways. Separators are optional, which is what
 # makes the no-space "3In1" form work.
-_N_IN_ONE_RE = re.compile(r"\b(\d+)\s*-?\s*in\s*-?\s*1\b", re.IGNORECASE)
+#
+# The leading `(?:(?<=[A-Za-z])-)?` (2026-08-12, owner-reported live) also
+# consumes a hyphen that is GLUED directly onto a preceding word with no
+# space ("Deluxe-2 in 1") -- without it, that hyphen survives as part of
+# the fused word "Deluxe-2" (str.split() only breaks on whitespace, and
+# _normalise() deliberately preserves hyphens for real compounds like
+# "Non-Inverter"), and the final title reads "-2 in 1", which scans as
+# negative two. The lookbehind is non-consuming so it never matches a
+# hyphen that is part of something else (a model number's own internal
+# hyphen, e.g. "KLU-12B03S", is untouched: nothing there spells "N in 1").
+_N_IN_ONE_RE = re.compile(r"(?:(?<=[A-Za-z])-)?\s*\b(\d+)\s*-?\s*in\s*-?\s*1\b", re.IGNORECASE)
 
 
 def _protect_n_in_one(text: str) -> tuple[str, dict[str, str]]:
@@ -170,7 +180,11 @@ def _protect_n_in_one(text: str) -> tuple[str, dict[str, str]]:
     def _swap(match: re.Match[str]) -> str:
         token = f"ninonetoken{len(restore)}"
         restore[token] = f"{match.group(1)} in 1"
-        return token
+        # A leading glued hyphen was consumed as part of this match (see the
+        # regex comment above) -- put back the word boundary it destroyed,
+        # or the preceding word fuses onto the token with no space at all.
+        prefix = " " if match.group(0).startswith("-") else ""
+        return prefix + token
 
     return _N_IN_ONE_RE.sub(_swap, text or ""), restore
 
@@ -207,7 +221,6 @@ def _phrases_in_title(
         return None
     if model_key and model_key not in re.sub(r"[^a-z0-9]", "", raw_title.lower()):
         return None
-
 
     # The sentinel is deliberately NOT restored in here. It stays in place
     # through the longest-wins redundancy filter in harvest_title_terms, so
