@@ -547,6 +547,15 @@ async def writer_node(state: PipelineState) -> dict[str, Any]:
         # slot below -- build_name()'s dedup only catches a byte-identical
         # repeat, not a differently-worded one.
         wattage=state.extraction.confirmed_value("wattage") or "",
+        # The product's own confirmed specs as a term source (2026-08-11,
+        # owner-clarified): a word like "2 in 1" is derived from
+        # understanding the product's features, not copied from any seller's
+        # title, so title-only harvesting could never find it. Narrow by
+        # design -- see _spec_feature_patterns.
+        spec_text=" ".join(
+            str(v) for v in facts.values()
+            if v and str(v).strip().upper() != "UNKNOWN"
+        ),
     )
     verified_terms = verify_terms(
         harvested, facts, series=state.extraction.confirmed_value("series")

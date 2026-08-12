@@ -54,6 +54,19 @@ _STOPWORDS = {
 # is rejected rather than waved through.
 
 
+# How many NOT-fact-backed (marketing) words may reach one title.
+#
+# 2026-08-11, owner-directed: "if add it should add relevant perfect like I
+# add, or just skip, because wrong combination makes title worse for SEO."
+# A marketing word is verified on a trusted source's say-so alone, with no
+# spec to check it against, so without a cap a single padded retailer title
+# ("Deluxe Heavy Duty Powerful Turbo ...") would stuff every one of them
+# into the product title. Two is what the owner's own reference titles use
+# ("Deluxe" + "2 in 1"), and it leaves the character budget for the
+# fact-backed spec words that actually describe the product.
+MAX_MARKETING_TERMS = 2
+
+
 class TitleTerm(BaseModel):
     term: str
     frequency: int
@@ -74,6 +87,17 @@ class TitleTerm(BaseModel):
     # orchestrator.py's _brand_identity_ok (official+trusted_secondary get a
     # specific bounded trust allowance; unvetted `web` does not).
     from_trusted_source: bool = False
+    # Set by verify_terms: True when the term is backed by this product's own
+    # CONFIRMED SPEC FACTS (or its extracted series name), False when it was
+    # verified only because a trusted source's title used the wording.
+    #
+    # The distinction exists because the two carry very different risk. A
+    # fact-backed term ("DC Inverter", "Heat & Cool") is a real, verified
+    # property -- any number of them can safely go in a title. A
+    # marketing-only term ("Deluxe", "Heavy Duty") is trusted on the source's
+    # say-so alone, so a single padded retailer title could otherwise stuff
+    # a dozen of them into the title. select_title_features caps the latter.
+    fact_backed: bool = False
 
 
 def _normalise(text: str) -> str:
@@ -102,6 +126,61 @@ def _tokens_to_drop(
     return drop
 
 
+# "2 in 1", "3-in-1", "5 In 1" -- a standard, high-value appliance feature
+# phrase that the general noise filter below would otherwise destroy
+# completely: its digits are dropped as noise and "in" is a stopword, so
+# every one of its words is discarded individually and the phrase can never
+# form. Collapsed to a single indivisible token BEFORE that filter runs.
+# Deliberately narrow: recognising this one well-known shape does not
+# reopen the general digit gate, so prices/years/quantities are still
+# dropped (see test_bare_digits_are_still_dropped_as_noise).
+# Matches every real-world spelling of the feature -- "2 in 1", "3-in-1",
+# "5 IN 1", "3In1", "3 - in - 1" -- so the same feature can never reach a
+# title written two different ways. Separators are optional, which is what
+# makes the no-space "3In1" form work.
+_N_IN_ONE_RE = re.compile(r"\b(\d+)\s*-?\s*in\s*-?\s*1\b", re.IGNORECASE)
+
+
+def _protect_n_in_one(text: str) -> tuple[str, dict[str, str]]:
+    """
+    Replaces each "N in 1" run with a single opaque token, returning the
+    rewritten text and the token->original mapping needed to restore it.
+
+    The token must be plain lowercase alphanumeric so it survives
+    _normalise() (which strips punctuation) and the noise filter (not a
+    stopword, not a bare digit, at least 2 characters).
+    """
+    restore: dict[str, str] = {}
+
+    def _swap(match: re.Match[str]) -> str:
+        token = f"ninonetoken{len(restore)}"
+        restore[token] = f"{match.group(1)} in 1"
+        return token
+
+    return _N_IN_ONE_RE.sub(_swap, text or ""), restore
+
+
+def _restore_n_in_one(phrase: str, restore: dict[str, str]) -> str:
+    for token, original in restore.items():
+        phrase = re.sub(re.escape(token), original, phrase, flags=re.IGNORECASE)
+    return phrase
+
+
+def _spec_feature_patterns(spec_text: str) -> set[str]:
+    """
+    High-value title phrases recognised inside the product's own confirmed
+    spec text -- see harvest_title_terms() for why this is deliberately a
+    small pattern list rather than generic n-gram harvesting.
+
+    Returns each match normalised to its canonical title form ("3-IN-1" and
+    "3 in 1" both yield "3 in 1"), so the same feature never reaches a title
+    written two different ways.
+    """
+    if not spec_text or not spec_text.strip():
+        return set()
+    return {f"{match.group(1)} in 1" for match in _N_IN_ONE_RE.finditer(spec_text)}
+
+
 def _phrases_in_title(raw_title: str, drop: set[str], model_key: str) -> set[str] | None:
     """
     All 1-to-4-word sub-phrases survivng stopword/identity stripping in one
@@ -112,6 +191,7 @@ def _phrases_in_title(raw_title: str, drop: set[str], model_key: str) -> set[str
     if model_key and model_key not in re.sub(r"[^a-z0-9]", "", raw_title.lower()):
         return None
 
+    raw_title, n_in_one_restore = _protect_n_in_one(raw_title)
     words = _normalise(raw_title).split()
     runs: list[list[str]] = []
     run: list[str] = []
@@ -134,7 +214,9 @@ def _phrases_in_title(raw_title: str, drop: set[str], model_key: str) -> set[str
     for candidate_run in runs:
         for size in (1, 2, 3, 4):
             for start in range(len(candidate_run) - size + 1):
-                phrases.add(" ".join(candidate_run[start:start + size]))
+                phrases.add(_restore_n_in_one(
+                    " ".join(candidate_run[start:start + size]), n_in_one_restore
+                ))
     return phrases
 
 
@@ -147,6 +229,7 @@ def harvest_title_terms(
     min_frequency: int = 1,
     trusted_titles: Iterable[str] = (),
     wattage: str = "",
+    spec_text: str = "",
 ) -> list[TitleTerm]:
     """
     Extracts candidate series/feature phrases from competitor titles, ranked by
@@ -195,6 +278,26 @@ def harvest_title_terms(
         phrases = _phrases_in_title(raw_title, drop, model_key)
         if phrases:
             trusted_phrases |= phrases
+
+    # The product's OWN confirmed spec text is a trusted channel too
+    # (2026-08-11, owner-clarified). His real title "Anex AG-2098 Deluxe 2 in
+    # 1 Vacuum Cleaner - 1500W" mixes a word found by searching other sellers
+    # ("Deluxe") with one he derived from the product's own specs and
+    # features ("2 in 1") -- the latter appears in NO seller's title, so
+    # title-only harvesting could never produce it however well-verified it
+    # was. Reading a phrase out of already-confirmed facts is not invention:
+    # it is the same no-hallucination contract as the rest of the system.
+    #
+    # DELIBERATELY NARROW -- only recognised high-value feature PATTERNS, not
+    # arbitrary n-grams. Spec text is prose, and phrases harvested from it
+    # arrive marked trusted (auto-verified, no fact-match needed, because the
+    # specs ARE the facts), so generic n-gram harvesting here would let any
+    # stray four-word fragment of a spec paragraph into a title. One pattern
+    # is recognised today, "N in 1" -- unambiguous, genuinely useful in a
+    # title, and exactly the owner's reported case. Add further patterns
+    # here only with a real example to justify each one.
+    for spec_phrase in _spec_feature_patterns(spec_text):
+        trusted_phrases.add(spec_phrase)
 
     for raw_title in titles:
         phrases_in_title = _phrases_in_title(raw_title, drop, model_key)
@@ -301,38 +404,50 @@ def verify_terms(
 
         key = term.term.lower()
 
-        if term.from_trusted_source:
+        # Fact backing is decided FIRST, before the trusted-source shortcut,
+        # so a trusted source's wording that also happens to be a real
+        # confirmed spec is correctly recorded as fact-backed rather than
+        # being lumped in with unverifiable marketing padding (which
+        # select_title_features caps).
+        words = [w for w in re.split(r"[^a-z0-9&]+", key) if len(w) > 2]
+        if words:
+            supported = all(word in haystack for word in words)
+        else:
+            # Every word is too short to check individually ("2 in 1"), so
+            # fall back to matching the phrase as a whole against the facts.
+            supported = bool(key) and key in haystack
+
+        if supported:
             verified.append(term.model_copy(update={
-                "verified": True,
-                "reason": "sourced from a trusted (official/trusted_secondary) source",
+                "verified": True, "fact_backed": True,
+                "reason": "every word confirmed by extracted facts",
             }))
             continue
 
         if series_key and key in series_key:
             verified.append(term.model_copy(update={
-                "verified": True,
+                "verified": True, "fact_backed": True,
                 "reason": "matches the extracted product series",
             }))
             continue
 
-        # Every meaningful word must be present in the confirmed facts.
-        words = [w for w in re.split(r"[^a-z0-9&]+", key) if len(w) > 2]
-        supported = bool(words) and all(word in haystack for word in words)
+        if term.from_trusted_source:
+            verified.append(term.model_copy(update={
+                "verified": True, "fact_backed": False,
+                "reason": "sourced from a trusted (official/trusted_secondary) source",
+            }))
+            continue
 
         verified.append(term.model_copy(update={
-            "verified": supported,
-            "reason": (
-                "every word confirmed by extracted facts"
-                if supported else
-                "not confirmed by extracted facts for this product; rejected"
-            ),
+            "verified": False,
+            "reason": "not confirmed by extracted facts for this product; rejected",
         }))
     return verified
 
 
 def select_title_features(
     terms: list[TitleTerm],
-    max_terms: int = 2,
+    max_terms: int | None = None,
 ) -> list[str]:
     """
     Returns the verified terms to pass into build_name(), most-corroborated first.
@@ -343,11 +458,18 @@ def select_title_features(
     Dispenser". Once a word has been used, any later phrase repeating it is
     dropped.
 
-    Capped because a title is a headline, not a spec sheet: two strong terms
-    read better and leave room for the full product type.
+    `max_terms=None` (the default since 2026-08-11, owner-directed) means no
+    count cap -- build_name()'s MAX_NAME_LENGTH is the only brake, and it
+    already drops features last-first until the title fits. The previous
+    hard cap of 2 could not build the owner's own feature-rich reference
+    titles ("TCL 24SaveIN-AI-41 2 Ton T3 WiFi Smart DC Inverter Heat & Cool
+    Split Air Conditioner" needs far more than two), and a count cap is the
+    wrong tool anyway: what actually matters is the character budget, which
+    is enforced where the title is assembled.
     """
     selected: list[str] = []
     used_words: set[str] = set()
+    marketing_used = 0
 
     for term in terms:
         if not term.verified:
@@ -355,9 +477,15 @@ def select_title_features(
         words = {w for w in term.term.lower().split() if len(w) > 2}
         if words & used_words:
             continue
+        if not term.fact_backed:
+            # Marketing padding is capped independently of the overall limit
+            # -- see MAX_MARKETING_TERMS.
+            if marketing_used >= MAX_MARKETING_TERMS:
+                continue
+            marketing_used += 1
         selected.append(term.term)
         used_words |= words
-        if len(selected) >= max_terms:
+        if max_terms is not None and len(selected) >= max_terms:
             break
 
     return selected

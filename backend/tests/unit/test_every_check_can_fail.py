@@ -109,6 +109,25 @@ def test_product_name_length_can_fail():
     assert not _run(name="X" * 200)["product_name_length"].passed
 
 
+def test_the_owners_own_canonical_titles_all_pass_the_length_check():
+    """
+    2026-08-11: the cap was 60, but the owner's written Boss Rule says
+    "Max ~90 characters" -- and 3 of his 5 canonical example titles are
+    63-84 chars, so the check was FAILING correct titles and burning
+    Writer/Reviewer retries trying to shorten them.
+    """
+    for title in (
+        "Anex AG-2098 Deluxe 2 in 1 Vacuum Cleaner - 1500W",
+        "Anex AG-3151 Deluxe Kitchen Robot - 700W",
+        "Dawlance DW6570 GB 8 Kg Twin Tub Semi Automatic Washing Machine",
+        "TCL 24SaveIN-AI-41 2 Ton T3 WiFi Smart DC Inverter Heat & Cool Split Air Conditioner",
+        "Haier HRF-418 IPRA 14 Cu Ft Purple Glass Door Smart Inverter Refrigerator",
+    ):
+        assert _run(name=title)["product_name_length"].passed, (
+            f"the owner's own canonical title must pass: {title!r} ({len(title)} chars)"
+        )
+
+
 def test_product_name_no_abbreviation_can_fail():
     assert not _run(name="Dawlance DW-131 AC")["product_name_no_abbreviation"].passed
 

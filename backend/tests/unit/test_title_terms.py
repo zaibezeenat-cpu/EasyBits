@@ -11,6 +11,7 @@ confirmed for that product. These tests exercise an air conditioner, a juicer,
 a water dispenser and an oven to prove no category is special-cased.
 """
 from app.builders.title_terms import (
+    TitleTerm,
     harvest_title_terms,
     select_title_features,
     verify_terms,
@@ -189,6 +190,74 @@ def test_selection_is_capped_so_the_title_stays_a_headline():
     assert len(select_title_features(_ac_terms(), max_terms=2)) <= 2
 
 
+# --- The marketing-word safeguard (2026-08-11, owner-directed) -------------
+#
+# Owner: "some keywords real combination should be perfect ... but it must be
+# under safeguards as wrong should not be or we will be in trouble ... if add
+# it should add relevant perfect like I add, or just skip, because wrong
+# combination makes title worse for SEO."
+#
+# The count cap was removed so feature-rich FACT-BACKED titles can be built
+# (his own "TCL ... 2 Ton T3 WiFi Smart DC Inverter Heat & Cool Split Air
+# Conditioner" needs far more than two). But a trusted source's wording is
+# auto-verified WITHOUT any fact check -- so lifting the cap on those too
+# would let one padded retailer title dump "Deluxe Best Quality Heavy Duty
+# Powerful ..." straight into the title. The two kinds of term are therefore
+# capped separately: unlimited fact-backed specs, few marketing words.
+
+
+def _marketing_heavy_terms():
+    """A single retailer title stuffed with unverifiable marketing padding."""
+    harvested = harvest_title_terms(
+        titles=[],
+        trusted_titles=["Anex AG-2098 Deluxe Heavy Duty Powerful Turbo Vacuum Cleaner"],
+        brand="Anex", model="AG-2098", product_type="Vacuum Cleaner",
+    )
+    return verify_terms(harvested, {"body_material": "Plastic"})
+
+
+def test_marketing_only_words_are_capped_even_with_no_overall_limit():
+    selected = select_title_features(_marketing_heavy_terms(), max_terms=None)
+    assert len(selected) <= 2, (
+        f"a padded retailer title must not flood the product title, got {selected}"
+    )
+
+
+def test_fact_backed_terms_are_not_limited_by_the_marketing_cap():
+    """
+    The owner's feature-rich reference titles are all REAL specs, so they
+    must not be squeezed out by a cap meant for marketing padding. Terms are
+    built directly here (rather than harvested) so this measures ONLY the
+    marketing cap -- harvesting's own overlapping-phrase dedup would
+    otherwise be what limits the count, testing the wrong thing.
+    """
+    fact_backed = [
+        TitleTerm(term=t, frequency=1, corroborated=True, verified=True, fact_backed=True)
+        for t in ("DC Inverter", "Heat Cool", "Split", "WiFi Smart", "Tropical T3")
+    ]
+    selected = select_title_features(fact_backed, max_terms=None)
+    assert len(selected) == 5, (
+        f"fact-backed spec words must not be capped at the marketing limit, got {selected}"
+    )
+
+
+def test_marketing_words_are_capped_while_fact_backed_ones_flow_freely():
+    """Both kinds in one list: every spec word survives, marketing stops at
+    MAX_MARKETING_TERMS -- the exact mix a real product produces."""
+    terms = [
+        TitleTerm(term="Deluxe", frequency=1, corroborated=True, verified=True, fact_backed=False),
+        TitleTerm(term="Heavy Duty", frequency=1, corroborated=True, verified=True, fact_backed=False),
+        TitleTerm(term="Powerful Turbo", frequency=1, corroborated=True, verified=True, fact_backed=False),
+        TitleTerm(term="DC Inverter", frequency=1, corroborated=True, verified=True, fact_backed=True),
+        TitleTerm(term="Glass Door", frequency=1, corroborated=True, verified=True, fact_backed=True),
+        TitleTerm(term="Bottom Load", frequency=1, corroborated=True, verified=True, fact_backed=True),
+    ]
+    selected = select_title_features(terms, max_terms=None)
+    assert "Powerful Turbo" not in selected, "the 3rd marketing word must be dropped"
+    for spec_word in ("DC Inverter", "Glass Door", "Bottom Load"):
+        assert spec_word in selected, f"{spec_word} is a confirmed spec and must survive"
+
+
 def test_no_titles_yields_no_features_rather_than_guesses():
     assert select_title_features(_ac_terms(titles=[])) == []
 
@@ -219,6 +288,84 @@ def test_a_brand_marketing_word_from_the_official_page_reaches_the_title():
 
     selected = select_title_features(list(terms.values()))
     assert "Deluxe" in selected
+
+
+# --- Terms derived from the product's OWN confirmed specs (2026-08-11) -----
+#
+# Owner-clarified: his real title "Anex AG-2098 Deluxe 2 in 1 Vacuum Cleaner
+# - 1500W" mixes two DIFFERENT kinds of word:
+#   * "Deluxe"  -- found by searching how others title this model (already
+#                  handled: harvested from trusted_titles).
+#   * "2 in 1"  -- NOT in anyone's title. He derived it from the product's own
+#                  specifications and features ("thinking and understanding
+#                  the product").
+# The specs are already CONFIRMED FACTS, so reading a phrase out of them is
+# not invention -- it is the same no-hallucination contract the rest of the
+# system runs on. Two independent gaps had to be closed for this to work.
+
+
+def test_a_feature_pattern_in_the_confirmed_specs_can_reach_the_title():
+    """Gap 1: harvesting only ever looked at TITLES, never at the product's
+    own confirmed spec text -- so a real feature described only in the specs
+    could never become a title term, however well-verified it was."""
+    harvested = harvest_title_terms(
+        titles=[], brand="Anex", model="AG-2098", product_type="Vacuum Cleaner",
+        spec_text="2 in 1 vacuum and blower function. Plastic body.",
+    )
+    terms = {t.term.lower() for t in harvested}
+    assert "2 in 1" in terms
+
+
+def test_spec_harvesting_does_not_pull_in_arbitrary_prose():
+    """
+    The narrow-by-design guard: spec text is prose and its phrases arrive
+    auto-verified (the specs ARE the facts), so generic n-gram harvesting
+    here would let any stray fragment of a spec paragraph into a title.
+    Only recognised feature patterns are taken.
+    """
+    harvested = harvest_title_terms(
+        titles=[], brand="Anex", model="AG-2098", product_type="Vacuum Cleaner",
+        spec_text="2 in 1 vacuum and blower function. Durable plastic body with copper motor.",
+    )
+    terms = {t.term.lower() for t in harvested}
+    assert terms == {"2 in 1"}, f"only the recognised pattern may be taken, got {terms}"
+
+
+def test_n_in_1_is_recognised_in_every_common_spelling():
+    """"3-IN-1", "3 In 1" and "3 in 1" are the same feature and must all
+    normalise to one canonical title form, so it can never reach a title
+    written two different ways."""
+    for spelling in ("3 in 1", "3-in-1", "3 IN 1", "3In1", "3 - in - 1"):
+        harvested = harvest_title_terms(
+            titles=[], brand="Anex", model="AG-2098", product_type="Vacuum Cleaner",
+            spec_text=f"{spelling} multifunction unit",
+        )
+        assert any(t.term == "3 in 1" for t in harvested), f"{spelling!r} must be recognised"
+
+
+def test_a_spec_derived_term_is_verified_without_needing_a_seller_to_repeat_it():
+    """It came from this product's own confirmed facts -- requiring a seller
+    to also have written it down would reject it for a reason unrelated to
+    whether it is true."""
+    harvested = harvest_title_terms(
+        titles=[], brand="Anex", model="AG-2098", product_type="Vacuum Cleaner",
+        spec_text="2 in 1 vacuum and blower function",
+    )
+    verified = verify_terms(harvested, {"features": "2 in 1 vacuum and blower function"})
+    two_in_one = [t for t in verified if t.term.lower() == "2 in 1"]
+    assert two_in_one and two_in_one[0].verified
+
+
+def test_bare_digits_are_still_dropped_as_noise():
+    """The narrow "N in 1" allowance must not reopen the general digit gate --
+    prices, years and stray quantities must still be discarded."""
+    harvested = harvest_title_terms(
+        titles=[], brand="Anex", model="AG-2098", product_type="Vacuum Cleaner",
+        spec_text="Rs 15000 price 2024 model 220 volts",
+    )
+    terms = {t.term.lower() for t in harvested}
+    for noise in ("15000", "2024", "220"):
+        assert noise not in terms
 
 
 # --- Wattage parity with capacity (2026-08-10, review-flagged) -------------

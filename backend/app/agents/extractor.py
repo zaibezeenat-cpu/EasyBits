@@ -96,6 +96,37 @@ every value must be READ from a source or reported UNKNOWN.
 ## Required Fields (extract exactly these — do not add or omit fields)
 {required_fields_json}
 
+## One EXTRA field, always: "series"
+
+In addition to the required fields above, always emit ONE more citation with
+`field_name: "series"`. This is the manufacturer's own product-line or
+marketing word for this exact model — "Deluxe", "Handy", "Luxury Ultra",
+"Titan", "Glory Pro", "Ario MAX". It is used to build the product title, so
+it is the one field where the brand's own marketing wording is wanted rather
+than avoided.
+
+READING ONLY — this field is NOT inferable. Take it only when it sits
+directly beside THIS model's name in a source, ideally the official brand
+page:
+
+    "Anex Deluxe Chopper AG-3001"      -> series = "Deluxe"
+    "Kenwood KLU-12B03S Luxury Ultra"  -> series = "Luxury Ultra"
+
+Output UNKNOWN — do not guess — when:
+  * No source attaches such a word to this model. Most products have no
+    series word at all, and UNKNOWN is the correct, common answer.
+  * The word is the seller's own sales padding rather than the
+    manufacturer's naming: "Best Price", "Original", "Imported",
+    "Heavy Duty", "Powerful", "Mega Offer", "Free Delivery".
+  * The word describes a specification you are already extracting
+    separately (capacity, wattage, colour, "Inverter", "Digital"). Those
+    belong in their own fields, not here.
+  * It is attached to a DIFFERENT model on the same page (related-product
+    strips are full of these).
+
+A wrong series word is worse than none: it goes straight into the public
+product title, so when in doubt, output UNKNOWN.
+
 ## Source Documents (in priority order — official brand site first, then reference sites)
 {source_documents}
 <!-- Each document rendered as: -->

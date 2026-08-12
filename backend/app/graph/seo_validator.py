@@ -1,7 +1,11 @@
 import math
 import re
 
-from app.builders.name_builder import contains_forbidden_abbreviation, title_format_violation
+from app.builders.name_builder import (
+    MAX_NAME_LENGTH,
+    contains_forbidden_abbreviation,
+    title_format_violation,
+)
 from app.builders.seo_compliance import count_keyword_occurrences
 from app.builders.seo_title_builder import (
     seo_title_contains_focus_keyword,
@@ -115,15 +119,18 @@ def validate_seo_rules(
     results = []
 
     # 1. Product Name Check.
-    # Raised from 44 to 60: every real product title supplied by the site owner
-    # measured 43-49 characters, so a 44-char cap rejected most of them and the
-    # pipeline would burn all 3 retries trying to shorten titles that were
-    # deliberately written that way. 60 keeps the SEO title (name + " | Buy
-    # Smart" = name + 12) inside Google's ~72-character display budget.
+    # Raised 44 -> 60 -> MAX_NAME_LENGTH (90), each time for the same reason:
+    # the cap was rejecting the owner's OWN correct titles and burning
+    # Writer/Reviewer retries trying to shorten something already right.
+    # 2026-08-11: the owner's written Boss Rule states "Max ~90 characters",
+    # and 3 of his 5 canonical example titles measure 63-84 characters --
+    # every one of which failed the 60 cap. Sourced from name_builder's
+    # MAX_NAME_LENGTH so the builder and the validator can never disagree
+    # about the limit again (they were independently hardcoded before).
     results.append(SeoCheckResult(
         check_name="product_name_length",
-        passed=len(product_name) <= 60,
-        detail=f"Product name length is {len(product_name)} (limit 60)."
+        passed=len(product_name) <= MAX_NAME_LENGTH,
+        detail=f"Product name length is {len(product_name)} (limit {MAX_NAME_LENGTH})."
     ))
 
     # Boss Rule: the product type is never abbreviated. "AC" and "Air

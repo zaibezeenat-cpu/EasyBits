@@ -153,28 +153,76 @@ def test_forbidden_abbreviation_detection():
     assert contains_forbidden_abbreviation("Kenwood 1 Ton KLU-12B03S Air Conditioner") is None
 
 
-# --- Wattage: a confirmed spec fact, not a harvested feature word -----------
+# --- The two Boss Rule title PATTERNS (owner's written spec, 2026-08-11) ----
 #
-# Owner-reported (2026-08-10, live): AG-3151's title was missing "700W".
-# Unlike a marketing word ("Deluxe"), wattage is already a CONFIRMED spec
-# fact once extraction has it -- there's no hallucination risk in always
-# including it, so it gets its own slot (same treatment as capacity: never
-# dropped for length) rather than depending on whether some competitor's
-# title happened to also mention it.
+# PATTERN A -- small/technical appliances, where the spec is a TECHNICAL
+# DETAIL, not the product's identity (vacuum cleaner, kitchen robot, coffee
+# maker, insect killer):
+#     [Brand] [Model] [Series/Features] [Category] - [Technical Spec]
+#     "Anex AG-2098 Deluxe 2 in 1 Vacuum Cleaner - 1500W"
+#   The dash before the spec is MANDATORY here.
+#
+# PATTERN B -- major/capacity appliances, where capacity/size IS a core part
+# of the identity (AC, refrigerator, washing machine):
+#     [Brand] [Model] [Capacity] [Series/Features] [Category]
+#     "Dawlance DW6570 GB 8 Kg Twin Tub Semi Automatic Washing Machine"
+#   NO dash -- the capacity is integrated into the name flow.
+#
+# Selection is by which spec carries the identity, so capacity (when
+# confirmed) wins: a product with both is a major appliance by definition.
+# An earlier implementation put wattage in capacity's slot with no dash for
+# every product -- that produced "Anex AG-3151 700W Deluxe Kitchen Robot",
+# which is neither pattern.
 
-def test_wattage_is_included_in_the_title():
-    name = build_name("Anex", "", "AG-3151", "Kitchen Robot", wattage="700W",
-                      features=["Deluxe"])
-    assert "700W" in name
-    assert name == "Anex AG-3151 700W Deluxe Kitchen Robot"
+def test_pattern_a_puts_the_wattage_last_after_a_dash():
+    """The owner's real AG-2098 case, verbatim."""
+    name = build_name("Anex", "", "AG-2098", "Vacuum Cleaner",
+                      features=["Deluxe", "2 in 1"], wattage="1500W")
+    assert name == "Anex AG-2098 Deluxe 2 in 1 Vacuum Cleaner - 1500W"
 
 
-def test_wattage_sits_in_the_same_slot_as_capacity_when_capacity_is_absent():
-    """A wattage-based small appliance has no 'capacity' in the AC/fridge
-    sense -- wattage fills that identity role instead, ending up in the same
-    position (right after model, before series/features)."""
+def test_pattern_a_reference_titles():
+    assert build_name("Anex", "", "AG-3151", "Kitchen Robot",
+                      features=["Deluxe"], wattage="700W") == \
+        "Anex AG-3151 Deluxe Kitchen Robot - 700W"
+    assert build_name("Anex", "", "AG-801", "Coffee Maker",
+                      features=["Deluxe"], wattage="550W") == \
+        "Anex AG-801 Deluxe Coffee Maker - 550W"
+    assert build_name("Anex", "", "AG-3092", "Insect Killer",
+                      features=["Deluxe"], wattage="2X10W") == \
+        "Anex AG-3092 Deluxe Insect Killer - 2X10W"
+
+
+def test_pattern_b_reference_titles_keep_capacity_inline_with_no_dash():
+    assert build_name("Dawlance", "8 Kg", "DW6570 GB", "Washing Machine",
+                      features=["Twin Tub Semi Automatic"]) == \
+        "Dawlance DW6570 GB 8 Kg Twin Tub Semi Automatic Washing Machine"
+    assert build_name("Haier", "14 Cu Ft", "HRF-418 IPRA", "Refrigerator",
+                      features=["Purple Glass Door", "Smart Inverter"]) == \
+        "Haier HRF-418 IPRA 14 Cu Ft Purple Glass Door Smart Inverter Refrigerator"
+
+
+def test_a_product_with_both_capacity_and_wattage_uses_both_slots():
+    """
+    Owner-corrected (2026-08-11) with real microwave examples: the two slots
+    are INDEPENDENT, not mutually exclusive -- capacity stays inline where
+    Pattern B puts it AND the wattage still trails after the dash:
+        "Anex AG-9039 Deluxe Digital Microwave With Oven - 900W"
+        "Anex AG-9039 25L Deluxe Digital Microwave With Oven - 900W"
+    """
+    with_capacity = build_name("Anex", "25 Liters", "AG-9039", "Microwave With Oven",
+                               features=["Deluxe", "Digital"], wattage="900W")
+    assert with_capacity == "Anex AG-9039 25L Deluxe Digital Microwave With Oven - 900W"
+
+    # The same product when no capacity was confirmed -- wattage slot alone.
+    without_capacity = build_name("Anex", "", "AG-9039", "Microwave With Oven",
+                                  features=["Deluxe", "Digital"], wattage="900W")
+    assert without_capacity == "Anex AG-9039 Deluxe Digital Microwave With Oven - 900W"
+
+
+def test_pattern_a_still_works_with_no_features_at_all():
     name = build_name("Anex", "", "AG-12", "Food Processor", wattage="450W")
-    assert name == "Anex AG-12 450W Food Processor"
+    assert name == "Anex AG-12 Food Processor - 450W"
 
 
 def test_wattage_is_never_dropped_for_length():
@@ -192,14 +240,14 @@ def test_wattage_is_not_duplicated_if_also_harvested_as_a_feature():
     """
     A harvested title-term phrase could independently produce "700W" as its
     own feature (e.g. a scraped title literally contains it as an n-gram) --
-    without dedup this would double up: "Anex AG-3151 700W Deluxe 700W
-    Kitchen Robot". The dedicated wattage slot is authoritative; an
-    exact (case-insensitive) duplicate coming through `features` is dropped.
+    without dedup this would double up: "Anex AG-3151 Deluxe 700W Kitchen
+    Robot - 700W". The dedicated wattage slot is authoritative; an exact
+    (case-insensitive) duplicate coming through `features` is dropped.
     """
     name = build_name("Anex", "", "AG-3151", "Kitchen Robot", wattage="700W",
                       features=["700w", "Deluxe"])
     assert name.count("700W") == 1
-    assert name == "Anex AG-3151 700W Deluxe Kitchen Robot"
+    assert name == "Anex AG-3151 Deluxe Kitchen Robot - 700W"
 
 
 def test_no_wattage_yields_the_bare_formula_unchanged():
