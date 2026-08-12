@@ -309,7 +309,15 @@ async def test_does_not_stop_early_without_an_official_source(monkeypatch, _noop
     Two RETAILERS are not the same as official + 1. Without an authoritative
     source the extra opinions are exactly what corroboration needs, so the early
     stop must stay shut -- speed must never be bought with accuracy here.
+
+    The separate total-sources CAP is raised for this test so it measures the
+    rule it is actually about (the corroboration early-stop) rather than
+    whatever MAX_SOURCES_FOR_CORROBORATION happens to be tuned to in
+    production. It was lowered 5 -> 2 for speed on 2026-08-11, which stopped
+    this test at 2 sources via a completely different mechanism and made it
+    look like the early-stop rule had broken when it had not.
     """
+    monkeypatch.setattr(orchestrator, "MAX_SOURCES_FOR_CORROBORATION", 5)
     monkeypatch.setattr(orchestrator, "resolve_sources", _domains(
         ("shopA.pk", "trusted_secondary"),
         ("shopB.pk", "trusted_secondary"),

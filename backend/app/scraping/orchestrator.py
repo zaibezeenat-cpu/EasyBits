@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import re
 from typing import Any
@@ -53,7 +52,17 @@ MAX_CONSECUTIVE_EMPTY_DOMAINS = 5
 # Pass 1 is pure HTTP — no browser, no shared process state — so running
 # domains in parallel is safe. Capped at 8 to avoid hammering retailer sites
 # and to keep total concurrent sockets sane when BATCH_CONCURRENCY > 1.
-# Measured speedup: 25 domains × 3s serial = 75s → ~10s parallel at 8 wide.
+# Projected speedup: 25 domains × 3s serial = 75s → ~10s parallel at 8 wide.
+#
+# NOT WIRED UP YET (2026-08-11): this constant and its `import asyncio` landed
+# ahead of the parallel fetch loop itself, so nothing reads it and pass 1 is
+# still serial -- the projected speedup above is NOT currently being realised.
+# Left in place as the recorded intent rather than deleted. Making pass 1
+# concurrent means reworking scrape_product's per-domain loop, where
+# `settled_domains`, `attempted`, `consecutive_empty_domains` and the
+# corroboration early-stop are all currently updated in strict sequence and
+# would each need to stay correct under interleaving -- worth doing, but it
+# needs its own tests, not a quiet in-place change.
 _PASS1_CONCURRENCY = 8
 
 
