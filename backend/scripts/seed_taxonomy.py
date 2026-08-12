@@ -483,6 +483,7 @@ async def seed_trusted_secondary_sources():
         {"domain": "surmawala.pk", "label": "Surmawala", "priority": 1},
         {"domain": "japanelectronics.pk", "label": "Japan Electronics", "priority": 2},
         {"domain": "pakelectronics.pk", "label": "Pak Electronics", "priority": 3},
+        {"domain": "modernelectronics.pk", "label": "Modern Electronics", "priority": 4},
     ]
     for source in defaults:
         await db.table("trusted_secondary_sources").upsert(

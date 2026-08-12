@@ -759,11 +759,29 @@ async def reviewer_node(state: PipelineState) -> dict[str, Any]:
     if state.resolved_warranty_phrase:
         facts["warranty"] = state.resolved_warranty_phrase
 
+    # PERFORMANCE FIX: brand and model_number are operator-provided facts from
+    # the input sheet -- they are ALWAYS confirmed, regardless of whether the
+    # scraper corroborated them. Without this, when anex.pk returns
+    # [rendered_without_match] (model not found on site search), the extraction
+    # gets null for brand/model, the reviewer sees them as null in Ground Truth,
+    # and rejects the written content on EVERY attempt -- burning all 5 retries
+    # per product on a check that can never pass, not because the content is
+    # wrong, but because the scraper couldn't confirm what the operator already
+    # stated explicitly. The operator's sheet IS the authoritative source for
+    # brand and model number; scraping corroborates specs, not identity.
+    if state.raw_input.brand_name:
+        facts["brand"] = state.raw_input.brand_name
+        facts["brand_name"] = state.raw_input.brand_name
+    if state.raw_input.model_number:
+        facts["model_number"] = state.raw_input.model_number
+        facts["sku"] = state.raw_input.model_number
+
     system_prompt = safe_format(
         REVIEWER_SYSTEM_PROMPT,
         cited_facts_json=json.dumps(facts),
         writer_output_text=concatenated_content
     )
+
 
     try:
         review_result = await llm_provider.call(
