@@ -157,6 +157,59 @@ async def test_writer_node_builds_deterministic_fields_not_llm_ones(taxonomy, mo
 
 
 @pytest.mark.asyncio
+async def test_writer_node_tells_the_writer_the_exact_word_count_floor(taxonomy, monkeypatch):
+    """
+    Owner-reported (2026-08-12, live): the Writer exhausted all 5 retries
+    and still shipped 276 words against an actual floor of 280 -- 4 words
+    short. Root cause: the prompt hardcoded a generic "at least 300 words"
+    regardless of the real, per-product floor computed by
+    seo_validator.minimum_body_words() (which varies with LSI count and
+    whether a secondary keyword is injected -- 280 in the failing case,
+    already BELOW the hardcoded 300). LLMs are unreliable at hitting an
+    exact word count from a vague instruction and tend to land close to
+    whatever number they're given, so a precise, sufficiently-padded target
+    is the fix, not a bigger fixed constant.
+
+    The prompt must receive the WORST-CASE floor (lsi_count=3, the max the
+    Writer is allowed to return, with a secondary keyword always injected)
+    computed BEFORE the Writer's own output exists, plus a safety margin --
+    never a static "300".
+    """
+    captured_prompt = {}
+
+    async def fake_call(**kwargs):
+        captured_prompt["system_prompt"] = kwargs.get("system_prompt", "")
+        return _writer_output()
+
+    monkeypatch.setattr(nodes.llm_provider, "call", fake_call)
+    await nodes.writer_node(_state())
+
+    from app.graph.seo_validator import minimum_body_words
+    worst_case_floor = minimum_body_words(lsi_count=3, has_secondary=True)
+
+    prompt = captured_prompt["system_prompt"]
+    assert "MUST total at least 300 words" not in prompt, (
+        "the old hardcoded, potentially-too-low constant must be gone -- note the "
+        "computed floor can legitimately still CONTAIN the digits 300 by coincidence "
+        "(this fixture's worst-case floor is 280, +20 margin = 300), so this checks "
+        "the specific old phrasing, not a bare substring"
+    )
+    assert f"AT LEAST {worst_case_floor} words" in prompt, (
+        f"the exact computed floor ({worst_case_floor}) must appear in the prompt, "
+        f"stated as the hard floor"
+    )
+    # This is the load-bearing part of the fix: a bare floor invites landing
+    # right at or under it (that's the reported bug), so the STATED target
+    # must carry the safety margin, not just the floor.
+    target = worst_case_floor + nodes.MIN_KEYWORD_TARGET_MARGIN
+    assert f"Aim for {target} words" in prompt, (
+        f"the padded target ({target} = floor {worst_case_floor} + "
+        f"MIN_KEYWORD_TARGET_MARGIN {nodes.MIN_KEYWORD_TARGET_MARGIN}) must appear "
+        f"in the prompt -- this is what actually prevents landing on the edge"
+    )
+
+
+@pytest.mark.asyncio
 async def test_writer_node_trusts_a_trusted_secondary_title_without_a_fact_match(taxonomy, monkeypatch):
     """
     Owner-reported (2026-08-10, live): AG-12's title was missing "Handy" --

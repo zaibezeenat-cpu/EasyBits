@@ -46,7 +46,7 @@ from app.db.repositories.settings import settings_repo
 from app.db.repositories.sources import sources_repo
 from app.db.repositories.taxonomy import taxonomy_repo
 from app.db.repositories.warranty import warranty_repo
-from app.graph.seo_validator import expected_meta_cta, validate_seo_rules
+from app.graph.seo_validator import expected_meta_cta, minimum_body_words, validate_seo_rules
 from app.graph.state import PipelineState
 from app.models.extraction import ExtractionResult
 from app.models.failure import FailureInfo
@@ -60,6 +60,14 @@ from app.scraping.playwright_client import _clean_html_to_text, is_block_page
 from app.scraping.source_discovery import FREE_TIERS, GOOGLE_TIER
 
 logger = logging.getLogger(__name__)
+
+# 2026-08-12 (owner-reported, live): a product shipped 4 words under its
+# real floor after 5 Writer/Reviewer retries. LLMs reliably undershoot a
+# word-count TOLD as the minimum -- stating the bare floor invites landing
+# right at (or just under) it. This margin is added to the floor computed
+# by seo_validator.minimum_body_words() before it's stated to the Writer as
+# its target, so the number itself has headroom built in.
+MIN_KEYWORD_TARGET_MARGIN = 20
 
 def safe_format(template: str, **kwargs) -> str:
     """
@@ -609,6 +617,21 @@ async def writer_node(state: PipelineState) -> dict[str, Any]:
     if state.review_result and not state.review_result.passed:
         feedback = f"\nPrevious attempt failed: {state.review_result.failure_summary}. Fix these issues."
 
+    # 2026-08-12 (owner-reported, live): a product shipped at 276 words
+    # against an actual (dynamically computed) floor of 280 -- the prompt
+    # used to hardcode a generic "at least 300 words" with no connection to
+    # seo_validator.minimum_body_words(), the function that actually decides
+    # pass/fail and can require MORE than 300 depending on LSI count. Passed
+    # here as the WORST-CASE floor -- lsi_count=3 (the maximum the Writer is
+    # ever allowed to return) and has_secondary=True (always the case, see
+    # secondary_type_keyword above) -- because the real LSI count doesn't
+    # exist yet at this point (it's the Writer's own output); the worst case
+    # is always a safe, sufficient target regardless of what the Writer
+    # returns. MIN_KEYWORD_TARGET_MARGIN pads the STATED target above the
+    # bare floor: LLMs reliably undershoot a number they're told is the
+    # minimum, so the number actually stated needs headroom built in.
+    min_body_words_floor = minimum_body_words(lsi_count=3, has_secondary=True)
+
     system_prompt = safe_format(
         WRITER_SYSTEM_PROMPT,
         cited_facts_json=json.dumps(facts),
@@ -620,7 +643,9 @@ async def writer_node(state: PipelineState) -> dict[str, Any]:
         focus_keyword=focus_keyword,
         meta_description_cta=meta_description_cta,
         feature_block_count=3 if state.selected_template_type == "A" else 2,
-        reviewer_feedback_if_retry=feedback
+        reviewer_feedback_if_retry=feedback,
+        min_body_words=min_body_words_floor,
+        target_body_words=min_body_words_floor + MIN_KEYWORD_TARGET_MARGIN,
     )
 
     try:

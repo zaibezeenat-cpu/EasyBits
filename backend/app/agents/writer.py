@@ -91,14 +91,18 @@ Template: {template_type}   <!-- "A" = 3 image/feature blocks, "B" = 1 text sect
   confirmed facts only.
 
 7. Content depth: the body copy (hero_paragraph + all feature_texts + bullets + FAQ answers
-   combined) MUST total at least 300 words, and 350-500 is the healthy target for a product
-   page. Write genuinely descriptive, factual sentences built ONLY from the Ground Truth —
-   never filler, never the same sentence reworded, and never a claim that is not in Ground
-   Truth just to reach a count. This minimum word count is CRITICALLY IMPORTANT to ensure
-   keyword density remains under 2.5% when all 5 keywords are included. If you write less
-   than 300 words, the density mathematically cannot stay under 2.5% and the product will be
-   rejected for keyword stuffing. Do NOT pad to a word count by repeating the product name —
-   that causes keyword-stuffing (see rule 1).
+   combined) MUST total AT LEAST {min_body_words} words — that exact number, not
+   approximately. Aim for {target_body_words} words as your actual target: that is
+   {min_body_words} plus a safety margin, because landing exactly on the floor risks
+   falling just short after your own word-counting rounds differently than the checker's.
+   Write genuinely descriptive, factual sentences built ONLY from the Ground Truth — never
+   filler, never the same sentence reworded, and never a claim that is not in Ground Truth
+   just to reach a count. This is CRITICALLY IMPORTANT: {min_body_words} words is the exact
+   floor at which the required keyword mentions (primary + secondary + LSI) can still stay
+   under the 2.5% density ceiling — write less and the density mathematically cannot stay
+   under 2.5%, and the product is rejected for keyword stuffing regardless of anything else
+   you do right. Do NOT pad to a word count by repeating the product name — that causes
+   keyword-stuffing (see rule 1).
 
 8. Keep every paragraph under 120 words. Rank Math checks paragraph length for readability,
    and long blocks are punishing to read on a phone, where most of this traffic lands.
