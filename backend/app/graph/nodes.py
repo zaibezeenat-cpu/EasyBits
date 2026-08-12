@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from app.agents.extractor import EXTRACTOR_SYSTEM_PROMPT
@@ -52,7 +53,7 @@ from app.graph.seo_validator import (
     validate_seo_rules,
 )
 from app.graph.state import PipelineState
-from app.models.extraction import ExtractionResult
+from app.models.extraction import ExtractionResult, SourceCitation
 from app.models.failure import FailureInfo
 from app.models.raw_input import RawProductInput
 from app.models.review_result import ReviewResult
@@ -134,6 +135,67 @@ async def intake_triage(state: PipelineState) -> dict[str, Any]:
         "variant_shaped": False,
         "manual_review_required": False
     }
+
+def _seed_known_facts(extraction: ExtractionResult, raw: RawProductInput) -> None:
+    """
+    Seeds `brand` and `model_number` as CONFIRMED citations from raw_input.
+
+    These two are schema-required fields (every category's spec schema
+    includes them, see scripts/seed_taxonomy.py's `_spec()`), so before this
+    they were treated like any other spec fact: `confirmed_value()` returned
+    None unless the Extractor LLM happened to find a citation for them in
+    scraped source text. That is a category error -- brand and model_number
+    are never "extracted", they are the operator's own CSV columns
+    (raw_input.brand_name / raw_input.model_number), already known with
+    certainty before scraping even runs. Many real listings only carry them
+    in a URL or an image rather than in prose a source citation can quote,
+    so this silently degraded both fields to "UNKNOWN" everywhere downstream
+    -- the specs table, the Writer's Ground Truth, LSI keywords -- even
+    though the true value was sitting in raw_input the whole time
+    (owner-reported, AG-2098: "No source stated ['brand', 'model_number',
+    'vacuum_type']" despite both being plainly in the CSV).
+
+    Seeded with source_type="official" -- an overload of that tag worth being
+    explicit about: everywhere else it means "scraped from the brand's own
+    website" (fact_corroboration.py's docstring), but here it means "the
+    operator's own CSV column", which this module treats as AT LEAST that
+    authoritative on purpose -- it is the identity of the exact product being
+    processed, not a claim a search result happened to make about it.
+
+    This still goes through the SAME cross-source resolution as every other
+    field (not a bypass), so the existing trust hierarchy in
+    fact_corroboration.py applies exactly as it already does for any two
+    citations: an equally-authoritative (official-tier) contradiction is a
+    genuine tie and still escalates as a real conflict (verified by
+    test_a_source_genuinely_disagreeing_with_raw_input_brand_still_conflicts).
+    A LOWER-tier disagreement (trusted_secondary or an unvetted web page) does
+    NOT tie or escalate -- official already outranks those tiers everywhere
+    else in this system ("an official source outranking a lone retailer is a
+    resolution, not a conflict"), and raw_input is resolved the same way,
+    intentionally: a single web page naming a different brand for this SKU is
+    far more likely to be a mismatched search result than the operator's own
+    CSV being wrong (verified by
+    test_a_lower_trust_disagreement_loses_to_raw_input_without_escalating).
+
+    Call after EVERY assignment of `extraction` from an LLM call (pass 1 AND
+    the pass-2 Google-tier retry both replace the ExtractionResult object)
+    so brand/model_number are never missing regardless of how many passes ran.
+    """
+    now = datetime.now(UTC)
+    for field_name, value in (
+        ("brand", raw.brand_name),
+        ("model_number", raw.model_number),
+    ):
+        if (value or "").strip():
+            extraction.citations.append(SourceCitation(
+                field_name=field_name,
+                value=value,
+                source_url=None,
+                source_type="official",
+                confidence="confirmed",
+                fetched_at=now,
+            ))
+
 
 async def _build_operator_source_docs(raw: RawProductInput) -> list[dict[str, Any]]:
     """
@@ -307,6 +369,7 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
             human_prompt=human_prompt,
             response_model=ExtractionResult
         )
+        _seed_known_facts(extraction, state.raw_input)
 
         # BUG FIX (Phase 3 integration test): after_extractor_router already
         # escalates when fields are missing/conflicting, but a router can only
@@ -350,6 +413,7 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
                     human_prompt=human_prompt,
                     response_model=ExtractionResult,
                 )
+                _seed_known_facts(extraction, state.raw_input)
                 scraped["scraped_data"] = combined
                 missing = extraction.missing_required_fields(state.category_schema)
                 uncorroborated = extraction.uncorroborated_required_fields(state.category_schema)

@@ -61,10 +61,13 @@ def _state(schema: CategorySpecSchema) -> PipelineState:
     )
 
 
-def _cite(field: str, value: str, confidence: str = "confirmed", quote: str | None = None):
+def _cite(
+    field: str, value: str, confidence: str = "confirmed", quote: str | None = None,
+    source_type: str = "official",
+):
     return SourceCitation(
         field_name=field, value=value, source_url="https://anex.pk/ag-2095",
-        source_type="official", confidence=confidence, fetched_at=NOW,
+        source_type=source_type, confidence=confidence, fetched_at=NOW,
         exact_quote=quote,
     )
 
@@ -89,6 +92,62 @@ async def _run(schema: CategorySpecSchema, citations: list[SourceCitation]) -> d
     ):
         gs.configured = False
         return await extractor_node(_state(schema))
+
+
+async def _run_forcing_pass2(schema: CategorySpecSchema, pass1_citations, pass2_citations) -> dict:
+    """
+    Like `_run`, but actually exercises the PASS-2 (Google-tier) retry --
+    `_run`'s google_search_client.configured=False always skips it, which
+    left `_seed_known_facts`'s second call site (extractor_node's pass-2
+    branch) with zero coverage (review-flagged). Forces pass 2 by leaving a
+    required field (wattage) uncited in pass 1, so `missing` is non-empty and
+    the retry fires; pass 1 and pass 2 return DISTINCT ExtractionResult
+    objects, matching real production (pydantic constructs a fresh instance
+    per LLM call), so this also proves the two seed calls don't compound into
+    duplicate citations on one shared object.
+    """
+    extraction_pass1 = ExtractionResult(product_id="p1", category_key="vacuum", citations=pass1_citations)
+    extraction_pass2 = ExtractionResult(product_id="p1", category_key="vacuum", citations=pass2_citations)
+    responses = iter([extraction_pass1, extraction_pass2])
+
+    async def _llm_call(role, system_prompt, human_prompt, response_model):
+        return next(responses)
+
+    scraped = {"scraped_data": [{
+        "url": "https://anex.pk/ag-2095", "source_type": "official",
+        "content": SOURCE_TEXT, "candidate_titles": ["Anex AG-2095 Vacuum Cleaner"],
+    }]}
+    extra_scraped = {"scraped_data": [{
+        "url": "https://anex.pk/ag-2095-2", "source_type": "trusted_secondary",
+        "content": SOURCE_TEXT, "candidate_titles": ["Anex AG-2095 Vacuum Cleaner"],
+    }]}
+
+    with (
+        patch("app.graph.nodes.settings_repo.get_setting", AsyncMock(return_value="augment")),
+        patch("app.graph.nodes.scrape_product", AsyncMock(side_effect=[scraped, extra_scraped])),
+        patch("app.graph.nodes._build_operator_source_docs", AsyncMock(return_value=[])),
+        patch("app.graph.nodes.llm_provider.call", _llm_call),
+        patch("app.graph.nodes.google_search_client") as gs,
+    ):
+        gs.configured = True
+        return await extractor_node(_state(schema))
+
+
+@pytest.mark.asyncio
+async def test_pass_2_retry_does_not_duplicate_seeded_citations():
+    """The wattage gap forces PASS 2 to fire on a fresh ExtractionResult
+    object; brand must still resolve cleanly, seeded exactly once per pass,
+    not accumulated across both."""
+    schema = _schema(BRAND_FIELD, WATTAGE_STRICT)
+    result = await _run_forcing_pass2(schema, pass1_citations=[], pass2_citations=[])
+
+    extraction = result["extraction"]
+    brand_citations = [c for c in extraction.citations if c.field_name == "brand"]
+    assert len(brand_citations) == 1, (
+        f"expected exactly one seeded brand citation on the pass-2 object, "
+        f"got {len(brand_citations)}"
+    )
+    assert extraction.confirmed_value("brand") == "Anex"
 
 
 VACUUM_TYPE_INFERABLE = SpecField(
@@ -170,6 +229,86 @@ async def test_an_optional_field_does_not_block():
     """The manual-chopper fix, end to end: mark it not-required and it ships."""
     result = await _run(
         _schema(SpecField(key="wattage", label="Wattage", required=False)), []
+    )
+    assert not result.get("manual_review_required")
+
+
+# --- Brand / model number are raw_input, not extraction (2026-08-12) -------
+#
+# Owner-reported (AG-2098): "No source stated ['brand', 'model_number',
+# 'vacuum_type'] for AG-2098" -- despite both being plainly typed into the
+# input CSV ("Anex", "AG-2098"). brand and model_number are schema-required
+# fields like any other spec, so `confirmed_value` returned None whenever no
+# scraped page happened to restate them verbatim -- a category error: these
+# two are never "extracted", they are the operator's own input, already
+# known with certainty before scraping even runs.
+
+BRAND_FIELD = SpecField(key="brand", label="Brand", required=True)
+MODEL_NUMBER_FIELD = SpecField(key="model_number", label="Model Number", required=True)
+
+
+@pytest.mark.asyncio
+async def test_brand_and_model_number_are_confirmed_from_raw_input_alone():
+    """No source states either field -- they still must not be missing."""
+    schema = _schema(BRAND_FIELD, MODEL_NUMBER_FIELD)
+    result = await _run(schema, [])  # zero citations: no source mentions either
+
+    extraction = result["extraction"]
+    assert extraction.confirmed_value("brand") == "Anex", (
+        "brand is a CSV column (raw_input.brand_name), not something a "
+        "source has to state"
+    )
+    assert extraction.confirmed_value("model_number") == "AG-2095"
+    assert "brand" not in extraction.missing_required_fields(schema)
+    assert "model_number" not in extraction.missing_required_fields(schema)
+    assert not result.get("manual_review_required")
+
+
+@pytest.mark.asyncio
+async def test_a_source_agreeing_with_raw_input_brand_still_confirms():
+    """A source stating the SAME brand must not create a false conflict."""
+    schema = _schema(BRAND_FIELD)
+    result = await _run(schema, [_cite("brand", "Anex")])
+    assert result["extraction"].confirmed_value("brand") == "Anex"
+    assert not result.get("manual_review_required")
+
+
+@pytest.mark.asyncio
+async def test_a_source_genuinely_disagreeing_with_raw_input_brand_still_conflicts():
+    """
+    An EQUALLY-trusted (official-tier) disagreement must still surface as a
+    real conflict rather than being silently overridden -- the existing
+    cross-source conflict logic in fact_corroboration.py must still see both
+    sides when neither outranks the other.
+    """
+    schema = _schema(BRAND_FIELD)
+    result = await _run(schema, [_cite("brand", "Totally Different Brand", source_type="official")])
+    assert result.get("manual_review_required"), (
+        "a genuine brand disagreement between raw_input and an equally-trusted "
+        "scraped source must still escalate, not be silently decided by "
+        "raw_input alone"
+    )
+    assert result["failure"].category == "spec_conflict"
+
+
+@pytest.mark.asyncio
+async def test_a_lower_trust_disagreement_loses_to_raw_input_without_escalating():
+    """
+    A trusted_secondary/web source disagreeing with raw_input does NOT tie or
+    escalate -- official already outranks those tiers everywhere else in this
+    system ("an official source outranking a lone retailer is a resolution,
+    not a conflict"), and raw_input is resolved the same way, intentionally
+    (see _seed_known_facts's docstring): a single lower-trust page naming a
+    different brand for this exact SKU is far more likely to be a mismatched
+    search result than the operator's own CSV being wrong.
+    """
+    schema = _schema(BRAND_FIELD)
+    result = await _run(
+        schema, [_cite("brand", "Totally Different Brand", source_type="web")]
+    )
+    assert result["extraction"].confirmed_value("brand") == "Anex", (
+        "raw_input must win over an unvetted lower-tier disagreement, not "
+        "escalate or be silently overridden by the weaker source"
     )
     assert not result.get("manual_review_required")
 
