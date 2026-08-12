@@ -11,6 +11,7 @@ confirmed for that product. These tests exercise an air conditioner, a juicer,
 a water dispenser and an oven to prove no category is special-cased.
 """
 from app.builders.title_terms import (
+    MAX_MARKETING_WORDS,
     TitleTerm,
     harvest_title_terms,
     select_title_features,
@@ -418,3 +419,66 @@ def test_a_retailer_only_word_still_needs_a_confirmed_fact():
     assert "turbo" in terms
     assert terms["turbo"].corroborated, "single mention is now enough to corroborate"
     assert not terms["turbo"].verified, "but it still isn't a confirmed spec fact"
+
+
+# --- Review-flagged safeguard defects (2026-08-11) --------------------------
+# All three were found by an independent adversarial review and confirmed
+# against the real code before being fixed.
+
+
+def test_a_spec_derived_term_survives_when_a_title_also_contains_it():
+    """
+    DEFECT: the longest-wins redundancy filter deleted the standalone
+    "2 in 1" whenever a scraped title also carried it inside a longer phrase
+    ("Deluxe 2 in 1"), cancelling the spec-derived fix in exactly the common
+    case it was written for -- and the surviving compound was then classified
+    as MARKETING, so it consumed the marketing budget too.
+    """
+    harvested = harvest_title_terms(
+        titles=[], trusted_titles=["Anex AG-2098 Deluxe 2 in 1 Vacuum Cleaner"],
+        brand="Anex", model="AG-2098", product_type="Vacuum Cleaner",
+        spec_text="2 in 1 vacuum and blower",
+    )
+    terms = {t.term.lower(): t for t in harvested}
+    assert "2 in 1" in terms, f"the spec-derived term must survive, got {list(terms)}"
+
+
+def test_a_spec_derived_term_is_fact_backed_not_marketing():
+    """It came from the confirmed specs, so it must not eat the marketing
+    budget meant for unverifiable seller padding -- including when the specs
+    spell it with hyphens ("3-in-1") and the canonical form does not match
+    the raw spec text by substring."""
+    for spelling in ("2 in 1", "2-in-1"):
+        harvested = harvest_title_terms(
+            titles=[], brand="Anex", model="AG-2098", product_type="Vacuum Cleaner",
+            spec_text=f"{spelling} vacuum and blower",
+        )
+        verified = {t.term.lower(): t for t in verify_terms(harvested, {"features": spelling})}
+        assert verified["2 in 1"].fact_backed, f"{spelling!r} must count as fact-backed"
+
+
+def test_marketing_padding_is_capped_by_WORDS_not_by_phrase_count():
+    """
+    DEFECT: the cap counted PHRASES, and harvesting emits phrases up to four
+    words -- so "Deluxe Heavy Duty Powerful" was one phrase, passed a cap of
+    two, and put four unverifiable marketing words in the title. The owner's
+    concern is words in the title, not how they were grouped.
+    """
+    harvested = harvest_title_terms(
+        titles=[],
+        trusted_titles=["Anex AG-2098 Super Turbo Jumbo Mega Deluxe Heavy Duty Powerful Vacuum Cleaner"],
+        brand="Anex", model="AG-2098", product_type="Vacuum Cleaner",
+    )
+    selected = select_title_features(verify_terms(harvested, {"body_material": "Plastic"}))
+    marketing_words = sum(len(term.split()) for term in selected)
+    assert marketing_words <= MAX_MARKETING_WORDS, (
+        f"{marketing_words} marketing words reached the title via {selected}"
+    )
+
+
+def test_a_short_term_is_not_fact_backed_by_an_accidental_substring():
+    """The short-phrase fallback matched the facts blob as a raw substring,
+    so "5G" was "confirmed" by "has 5gb ram". Must match on word boundaries."""
+    terms = [TitleTerm(term="5G", frequency=1, corroborated=True, verified=False)]
+    verified = verify_terms(terms, {"memory": "has 5gb ram"})[0]
+    assert not verified.fact_backed and not verified.verified

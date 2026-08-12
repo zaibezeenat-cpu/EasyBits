@@ -87,7 +87,8 @@ def _good_description() -> str:
 
 
 def _run(writer=None, keyword=KEYWORD, name=KEYWORD, content=None, title=TITLE,
-         warranty=WARRANTY, cta=CTA):
+         warranty=WARRANTY, cta=CTA, model_number="DW-131", product_type="Air Conditioner",
+         brand="Dawlance"):
     return {
         c.check_name: c
         for c in validate_seo_rules(
@@ -99,6 +100,9 @@ def _run(writer=None, keyword=KEYWORD, name=KEYWORD, content=None, title=TITLE,
             warranty_phrase=warranty,
             category_name="Air conditioner",
             expected_cta=cta,
+            model_number=model_number,
+            product_type=product_type,
+            brand=brand,
         )
     }
 
@@ -133,7 +137,23 @@ def test_product_name_no_abbreviation_can_fail():
 
 
 def test_slug_length_can_fail():
-    assert not _run(name="Y" * 200)["slug_length"].passed
+    """
+    2026-08-11: this check now measures the EXPORTED slug (built from the
+    model number), not one invented from the product name -- so the way to
+    fail it is a model number too long for the URL budget, which
+    build_product_slug deliberately never truncates because a cut-off model
+    makes the product unfindable.
+    """
+    assert not _run(model_number="M" * 120)["slug_length"].passed
+
+
+def test_a_long_title_does_not_fail_the_slug_check():
+    """The regression this fix exists for: the owner's 76-90 character titles
+    used to fail slug_length on a URL constraint the real exported URL does
+    not have -- and no retry could fix it, because the Product Name is
+    rebuilt deterministically from the same inputs every time."""
+    long_title = "TCL 24SaveIN-AI-41 2 Ton T3 WiFi Smart DC Inverter Heat & Cool Split Air Conditioner"
+    assert _run(name=long_title)["slug_length"].passed
 
 
 def test_product_name_format_hygiene_can_fail():

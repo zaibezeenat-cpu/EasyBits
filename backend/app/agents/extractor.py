@@ -93,7 +93,7 @@ every value must be READ from a source or reported UNKNOWN.
 
 ## Category: {category_name}
 
-## Required Fields (extract exactly these — do not add or omit fields)
+## Required Fields (extract exactly these, plus the "series" field below — do not omit any, and add nothing else)
 {required_fields_json}
 
 ## One EXTRA field, always: "series"
@@ -137,7 +137,7 @@ product title, so when in doubt, output UNKNOWN.
 Return a single JSON object:
 {
   "citations": [
-    {"field_name": "<key from required fields>", "value": "<extracted text or 'UNKNOWN'>",
+    {"field_name": "<key from required fields, or \"series\">", "value": "<extracted text or 'UNKNOWN'>",
       "source_url": "<url or null>", "source_type": "<official|trusted_secondary>",
       "confidence": "<confirmed|unreachable>", "fetched_at": "<ISO 8601 timestamp>"}
   ],
@@ -148,13 +148,16 @@ Return a single JSON object:
 ## Worked Example
 Given source text: "The Dawlance DW-131 HP Sync features a 30 Liters capacity and Cook King
 recipes. Warranty details available separately." and required field "control_panel" is never
-mentioned anywhere in any source:
+mentioned anywhere in any source. Note the "series" citation is present even though this
+source names no series word — UNKNOWN is the correct, common answer for it:
 
 {
   "citations": [
     {"field_name": "capacity", "value": "30 Liters", "source_url": "https://dawlance.com.pk/products/dw-131-hp-sync",
       "source_type": "official", "confidence": "confirmed", "fetched_at": "2026-07-19T10:00:00Z"},
     {"field_name": "control_panel", "value": "UNKNOWN", "source_url": null,
+      "source_type": "official", "confidence": "unreachable", "fetched_at": "2026-07-19T10:00:00Z"},
+    {"field_name": "series", "value": "UNKNOWN", "source_url": null,
       "source_type": "official", "confidence": "unreachable", "fetched_at": "2026-07-19T10:00:00Z"}
   ],
   "image_urls": ["https://dawlance.com.pk/img/dw-131-1.jpg"],

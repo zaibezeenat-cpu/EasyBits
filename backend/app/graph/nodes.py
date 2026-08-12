@@ -736,6 +736,12 @@ async def reviewer_node(state: PipelineState) -> dict[str, Any]:
         category_name=state.raw_input.category_name,
         expected_cta=state.meta_description_cta or "",
         secondary_keyword=state.rank_math_secondary_keyword or "",
+        # For the slug check: these are what csv_assembler actually builds the
+        # exported slug from, so the check measures the URL that really ships
+        # rather than one derived from the (deliberately much longer) title.
+        model_number=state.raw_input.model_number,
+        product_type=state.raw_input.product_type or state.raw_input.category_name,
+        brand=state.raw_input.brand_name,
     )
 
     # 2. Warranty Consistency Check (Phase 1 §5.5)

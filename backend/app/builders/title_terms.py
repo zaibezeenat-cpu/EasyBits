@@ -56,15 +56,22 @@ _STOPWORDS = {
 
 # How many NOT-fact-backed (marketing) words may reach one title.
 #
+# Counted in WORDS, not phrases (corrected 2026-08-11 after review): harvesting
+# emits phrases of up to four words, so a phrase cap of 2 let
+# "Deluxe Heavy Duty Powerful" through as a single term -- four unverifiable
+# marketing words in the title, which is precisely what the owner asked to
+# prevent. What matters is words reaching the title, not how they were grouped.
+#
 # 2026-08-11, owner-directed: "if add it should add relevant perfect like I
 # add, or just skip, because wrong combination makes title worse for SEO."
 # A marketing word is verified on a trusted source's say-so alone, with no
 # spec to check it against, so without a cap a single padded retailer title
 # ("Deluxe Heavy Duty Powerful Turbo ...") would stuff every one of them
-# into the product title. Two is what the owner's own reference titles use
-# ("Deluxe" + "2 in 1"), and it leaves the character budget for the
-# fact-backed spec words that actually describe the product.
-MAX_MARKETING_TERMS = 2
+# into the product title. Three words covers what the owner's own reference
+# titles use ("Deluxe" = 1, "2 in 1" = 3 but fact-backed so it does not count
+# here), and it leaves the character budget for the fact-backed spec words
+# that actually describe the product.
+MAX_MARKETING_WORDS = 3
 
 
 class TitleTerm(BaseModel):
@@ -98,6 +105,14 @@ class TitleTerm(BaseModel):
     # say-so alone, so a single padded retailer title could otherwise stuff
     # a dozen of them into the title. select_title_features caps the latter.
     fact_backed: bool = False
+    # Harvested from the product's OWN confirmed spec text rather than from
+    # any seller's title. Recorded at harvest time so verify_terms does not
+    # have to re-derive it by string-matching the canonical form back against
+    # the raw facts -- that re-derivation silently failed whenever the specs
+    # spelled it differently ("3-in-1" vs the canonical "3 in 1"), demoting a
+    # genuine spec feature to marketing and making it consume the marketing
+    # budget.
+    from_spec: bool = False
 
 
 def _normalise(text: str) -> str:
@@ -162,7 +177,7 @@ def _protect_n_in_one(text: str) -> tuple[str, dict[str, str]]:
 
 def _restore_n_in_one(phrase: str, restore: dict[str, str]) -> str:
     for token, original in restore.items():
-        phrase = re.sub(re.escape(token), original, phrase, flags=re.IGNORECASE)
+        phrase = re.sub(re.escape(token) + r"\b", original, phrase, flags=re.IGNORECASE)
     return phrase
 
 
@@ -181,7 +196,9 @@ def _spec_feature_patterns(spec_text: str) -> set[str]:
     return {f"{match.group(1)} in 1" for match in _N_IN_ONE_RE.finditer(spec_text)}
 
 
-def _phrases_in_title(raw_title: str, drop: set[str], model_key: str) -> set[str] | None:
+def _phrases_in_title(
+    raw_title: str, drop: set[str], model_key: str,
+) -> tuple[set[str], dict[str, str]] | None:
     """
     All 1-to-4-word sub-phrases survivng stopword/identity stripping in one
     title, or None when the title isn't verifiably about this model.
@@ -191,6 +208,13 @@ def _phrases_in_title(raw_title: str, drop: set[str], model_key: str) -> set[str
     if model_key and model_key not in re.sub(r"[^a-z0-9]", "", raw_title.lower()):
         return None
 
+
+    # The sentinel is deliberately NOT restored in here. It stays in place
+    # through the longest-wins redundancy filter in harvest_title_terms, so
+    # "2 in 1" counts as ONE word there rather than three -- otherwise the
+    # standalone term is deleted as a "subsequence" of any longer phrase that
+    # contains it ("Deluxe 2 in 1"), which cancelled the spec-derived fix in
+    # exactly the common case it exists for. Restored at term construction.
     raw_title, n_in_one_restore = _protect_n_in_one(raw_title)
     words = _normalise(raw_title).split()
     runs: list[list[str]] = []
@@ -214,10 +238,8 @@ def _phrases_in_title(raw_title: str, drop: set[str], model_key: str) -> set[str
     for candidate_run in runs:
         for size in (1, 2, 3, 4):
             for start in range(len(candidate_run) - size + 1):
-                phrases.add(_restore_n_in_one(
-                    " ".join(candidate_run[start:start + size]), n_in_one_restore
-                ))
-    return phrases
+                phrases.add(" ".join(candidate_run[start:start + size]))
+    return phrases, n_in_one_restore
 
 
 def harvest_title_terms(
@@ -274,10 +296,15 @@ def harvest_title_terms(
 
     phrase_counts: Counter[str] = Counter()
     trusted_phrases: set[str] = set()
+    # Sentinel -> "N in 1" mappings from every source, merged so the tokens can
+    # be restored once at the end, AFTER the redundancy filter has run.
+    n_in_one_restore: dict[str, str] = {}
     for raw_title in trusted_titles:
-        phrases = _phrases_in_title(raw_title, drop, model_key)
-        if phrases:
+        harvested = _phrases_in_title(raw_title, drop, model_key)
+        if harvested:
+            phrases, restore = harvested
             trusted_phrases |= phrases
+            n_in_one_restore.update(restore)
 
     # The product's OWN confirmed spec text is a trusted channel too
     # (2026-08-11, owner-clarified). His real title "Anex AG-2098 Deluxe 2 in
@@ -296,13 +323,23 @@ def harvest_title_terms(
     # is recognised today, "N in 1" -- unambiguous, genuinely useful in a
     # title, and exactly the owner's reported case. Add further patterns
     # here only with a real example to justify each one.
+    # Spec-derived phrases are tokenised the same way, so they collapse onto
+    # the SAME sentinel as an identical phrase harvested from a title -- which
+    # is what stops "2 in 1" appearing twice, and what lets the spec origin
+    # win the fact_backed classification below.
+    spec_phrases: set[str] = set()
     for spec_phrase in _spec_feature_patterns(spec_text):
-        trusted_phrases.add(spec_phrase)
+        tokenised, restore = _protect_n_in_one(spec_phrase)
+        n_in_one_restore.update(restore)
+        spec_phrases.add(tokenised)
+    trusted_phrases |= spec_phrases
 
     for raw_title in titles:
-        phrases_in_title = _phrases_in_title(raw_title, drop, model_key)
-        if phrases_in_title is None:
+        harvested = _phrases_in_title(raw_title, drop, model_key)
+        if harvested is None:
             continue
+        phrases_in_title, restore = harvested
+        n_in_one_restore.update(restore)
         # Count each phrase once per title, so one verbose seller cannot
         # manufacture a majority on its own.
         for phrase in phrases_in_title:
@@ -336,20 +373,31 @@ def harvest_title_terms(
         and is_subsequence(as_words[short], as_words[long])
         and long_count >= short_count
     }
+    # A spec-derived phrase is never redundant. It is the product's own
+    # confirmed feature, so being contained in some seller's longer marketing
+    # phrase ("Deluxe 2 in 1") is no reason to drop it -- and dropping it was
+    # what silently cancelled the spec-derived fix AND handed the surviving
+    # compound to the marketing budget as a single unverified term.
+    redundant -= spec_phrases
 
     terms = []
     for phrase, count in phrase_counts.most_common():
         if phrase in redundant:
             continue
         is_trusted = phrase in trusted_phrases
+        from_spec = phrase in spec_phrases
         corroborated = is_trusted or count >= min_frequency
         terms.append(TitleTerm(
-            term=phrase,
+            # Sentinels are restored HERE, once, now that every phrase-level
+            # comparison above is done.
+            term=_restore_n_in_one(phrase, n_in_one_restore),
             frequency=count,
             corroborated=corroborated,
             verified=False,
             from_trusted_source=is_trusted,
+            from_spec=from_spec,
             reason=(
+                "found in this product's own confirmed specifications" if from_spec else
                 "sourced from a trusted (official/trusted_secondary) source" if is_trusted else
                 "" if count >= min_frequency else
                 f"appears in only {count} title(s); needs {min_frequency}"
@@ -409,13 +457,27 @@ def verify_terms(
         # confirmed spec is correctly recorded as fact-backed rather than
         # being lumped in with unverifiable marketing padding (which
         # select_title_features caps).
+        # A term harvested from the product's own confirmed specs IS a fact by
+        # construction -- no string re-derivation needed (and re-deriving it
+        # failed whenever the specs spelled it differently from the canonical
+        # form, e.g. "3-in-1" vs "3 in 1").
+        if term.from_spec:
+            verified.append(term.model_copy(update={
+                "verified": True, "fact_backed": True,
+                "reason": "found in this product's own confirmed specifications",
+            }))
+            continue
+
         words = [w for w in re.split(r"[^a-z0-9&]+", key) if len(w) > 2]
         if words:
             supported = all(word in haystack for word in words)
         else:
-            # Every word is too short to check individually ("2 in 1"), so
-            # fall back to matching the phrase as a whole against the facts.
-            supported = bool(key) and key in haystack
+            # Every word is too short to check individually. Match the phrase
+            # as a whole, on WORD BOUNDARIES -- a raw substring test made
+            # "5G" look confirmed by "has 5gb ram".
+            supported = bool(key) and re.search(
+                rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", haystack
+            ) is not None
 
         if supported:
             verified.append(term.model_copy(update={
@@ -478,11 +540,15 @@ def select_title_features(
         if words & used_words:
             continue
         if not term.fact_backed:
-            # Marketing padding is capped independently of the overall limit
-            # -- see MAX_MARKETING_TERMS.
-            if marketing_used >= MAX_MARKETING_TERMS:
+            # Marketing padding is capped independently of the overall limit,
+            # and counted in WORDS -- a four-word phrase is four marketing
+            # words in the title however it was grouped. See
+            # MAX_MARKETING_WORDS. A phrase that would breach the budget is
+            # skipped whole rather than truncated: half a marketing phrase
+            # reads worse than none.
+            if marketing_used + len(term.term.split()) > MAX_MARKETING_WORDS:
                 continue
-            marketing_used += 1
+            marketing_used += len(term.term.split())
         selected.append(term.term)
         used_words |= words
         if max_terms is not None and len(selected) >= max_terms:

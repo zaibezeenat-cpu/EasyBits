@@ -11,6 +11,12 @@ from app.builders.seo_title_builder import (
     seo_title_contains_focus_keyword,
     title_ends_with_power_word,
 )
+from app.builders.internal_links import (
+    MAX_URL_LENGTH,
+    PRODUCT_PATH,
+    SITE_BASE_URL,
+    build_product_slug,
+)
 from app.builders.warranty_verifier import extract_durations
 from app.models.review_result import SeoCheckResult
 from app.models.writer_output import WriterOutput
@@ -103,6 +109,9 @@ def validate_seo_rules(
     category_name: str,
     expected_cta: str,
     secondary_keyword: str = "",
+    model_number: str = "",
+    product_type: str = "",
+    brand: str = "",
 ) -> list[SeoCheckResult]:
     """
     V8.0 Production Lock — Deterministic SEO checks.
@@ -162,12 +171,28 @@ def validate_seo_rules(
         )
     ))
 
-    # 2. Slug Check (<= 75 chars)
-    slug = product_name.lower().replace(" ", "-").replace("/", "-")
+    # 2. Slug Check.
+    #
+    # 2026-08-11 (review-flagged): this used to invent a slug by lowercasing
+    # and hyphenating the PRODUCT NAME, then cap that at 75 -- but that slug
+    # is never shipped. The exported slug is build_product_slug(), a short
+    # model-based slug (csv_assembler.py) that is deliberately DECOUPLED from
+    # the title precisely so a long Boss Rule title cannot blow the URL
+    # budget (see name_builder.MAX_NAME_LENGTH's comment). Checking the
+    # invented one failed the owner's own 76-90 character titles on a
+    # constraint the real URL does not have -- and because the Product Name
+    # is rebuilt deterministically from unchanged inputs on every retry, no
+    # retry could ever have fixed it: it burned the full retry budget and
+    # then shipped flagged. Now checks the slug that is actually exported.
+    slug = build_product_slug(model_number, product_type, brand)
     results.append(SeoCheckResult(
         check_name="slug_length",
-        passed=len(slug) <= 75,
-        detail=f"Derived slug length is {len(slug)} (limit 75)."
+        passed=len(f"{SITE_BASE_URL}{PRODUCT_PATH}/{slug}/") <= MAX_URL_LENGTH,
+        detail=(
+            f"Exported product URL is "
+            f"{len(f'{SITE_BASE_URL}{PRODUCT_PATH}/{slug}/')} characters "
+            f"(limit {MAX_URL_LENGTH}); slug is {slug!r}."
+        )
     ))
 
     # 3. Focus Keyword coherence (2026-07-27): the PRIMARY focus keyword is the
