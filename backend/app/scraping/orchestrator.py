@@ -735,10 +735,9 @@ async def _official_out_of_stock_fallback(
             continue
 
         logger.info(
-            f"Found {brand_name} {model_number} on {domain} via Google site-search "
-            f"even though the site's own search did not return it (out of stock and "
-            f"hidden from the search index is the usual reason, but the page being "
-            f"missing from that index is all we actually observed): {url}"
+            f"Found {brand_name} {model_number} on {domain} via Google site-search; "
+            f"the site's own search did not return it (usually out of stock and "
+            f"hidden from the search index): {url}"
         )
         return {
             "url": result.url or url,
@@ -858,7 +857,8 @@ async def scrape_product(
     blocked = False
 
     # Domains that need no second look: they either produced a source, or a
-    # RENDERED page proved they do not stock the product.
+    # RENDERED page did not return the model in its search results (why it
+    # did not is unknown -- see the bail-out logs below).
     #
     # A pass-1 verdict is deliberately NOT enough to land here. Pass 1 is curl
     # only, so on a JS storefront it sees an unrendered shell -- and every
@@ -1021,10 +1021,9 @@ async def scrape_product(
                     if search_result_mentions_product(result.content, brand_token):
                         logger.info(
                             f"Domain {domain} (pass {pass_num}): search ran (page mentions "
-                            f"'{brand_name}') but '{model_number}' was not in its results. "
-                            f"Could be out of stock, the wrong domain for this brand, a "
-                            f"model number written differently than on the site, or a search "
-                            f"box that does not match it -- unknown from here. "
+                            f"'{brand_token}') but '{model_number}' was not in its results -- "
+                            f"cause unknown (out of stock / wrong domain / model spelled "
+                            f"differently on the site / search box mismatch). "
                             f"Skipping {len(candidates) - candidates.index(source) - 1} "
                             f"remaining URL pattern(s) for this domain."
                         )
@@ -1107,10 +1106,9 @@ async def scrape_product(
                     if result.content and search_result_mentions_product(result.content, brand_token):
                         logger.info(
                             f"Search page on {domain} loaded and mentions '{brand_token}', but no "
-                            f"detail page for '{model_number}' was reachable from its results. "
-                            f"Could be out of stock, the wrong domain for this brand, a model "
-                            f"number written differently than on the site, or a search box that "
-                            f"does not match it -- unknown from here. "
+                            f"detail page for '{model_number}' was reachable from its results -- "
+                            f"cause unknown (out of stock / wrong domain / model spelled "
+                            f"differently on the site / search box mismatch). "
                             f"Bailing out of remaining candidate patterns."
                         )
                         # Same out-of-stock fallback as the other bail-out above --

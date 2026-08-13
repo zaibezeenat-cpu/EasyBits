@@ -14,19 +14,18 @@ It used to be exactly that, and it was the single biggest cost in the pipeline.
 A shop whose search simply DOES NOT RETURN the product -- out of stock, never
 carried, listed under a different model number, it does not matter which --
 returns a perfectly good, fully-rendered page that just never names the model.
-The old rule read that as
-"Tier 1 failed" and launched a whole Chromium browser to re-confirm a "not
-found" that curl had already answered correctly.
+The old rule read that as "Tier 1 failed" and launched a whole Chromium browser
+to re-confirm a "not found" that curl had already answered correctly.
 
 With 105+ configured sources and a product carried by only 3-5 of them, roughly
 20 of the 25 permitted scrape attempts per product were exactly this case --
 each paying a full browser launch. Measured: ~150s/product with discovery vs
-~32s/product with discovery disabled, i.e. ~79% of runtime spent proving
-absences the cheap fetch had already proven.
+~32s/product with discovery disabled, i.e. ~79% of runtime spent re-confirming
+misses the cheap fetch had already established.
 
 So a missing model number is now split into two very different situations:
 
-  * the page RENDERED and genuinely lacks the product  -> trust it, no browser
+  * the page RENDERED and does not name the model     -> trust it, no browser
   * the page is an EMPTY JS SHELL that renders later   -> escalate, browser needed
 
 `_tier1_decision` below is that split, and it errs toward escalating: a wrong
