@@ -322,6 +322,54 @@ def _description_images(description_html: str | None, base_url: str) -> list[str
     return out
 
 
+def _split_description_and_specs(description_html: str | None) -> tuple[str, str]:
+    """
+    Splits raw description HTML into (prose, specification) -- deterministic,
+    no LLM, no truncation.
+
+    Specs are read from real <table> rows and <dl> pairs, rendered one
+    "Label: Value" per line. Prose is everything else. A page with no table
+    yields ("...prose...", "") -- the caller reports UNKNOWN rather than
+    inventing specs out of the prose, because a spec table that isn't there
+    isn't there.
+
+    Deliberately NOT capped: the whole point of raw capture is the COMPLETE
+    text (_clean_html_to_text truncates at 15k, which is what loses the tail
+    of long spec pages).
+    """
+    if not description_html or not str(description_html).strip():
+        return "", ""
+    try:
+        soup = BeautifulSoup(str(description_html), "html.parser")
+    except Exception:  # noqa: BLE001
+        return "", ""
+
+    spec_lines: list[str] = []
+    for table in soup.find_all("table"):
+        for row in table.find_all("tr"):
+            cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
+            cells = [c for c in cells if c]
+            if len(cells) >= 2:
+                spec_lines.append(f"{cells[0]}: {' '.join(cells[1:])}")
+            elif len(cells) == 1:
+                spec_lines.append(cells[0])
+        table.decompose()  # removed so it does not also appear in the prose
+    for dl in soup.find_all("dl"):
+        terms = [t.get_text(" ", strip=True) for t in dl.find_all("dt")]
+        values = [d.get_text(" ", strip=True) for d in dl.find_all("dd")]
+        for term, value in zip(terms, values):
+            if term or value:
+                spec_lines.append(f"{term}: {value}")
+        dl.decompose()
+
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    prose = "\n".join(
+        line.strip() for line in soup.get_text("\n").splitlines() if line.strip()
+    )
+    return prose, "\n".join(spec_lines)
+
+
 def _shopify_price(product: dict[str, Any]) -> str | None:
     """Predictive search puts `price` on the product; the catalog endpoint
     puts it on each variant instead. Already a decimal string in both."""
@@ -409,6 +457,10 @@ async def _woocommerce_store_api_fallback(
                 f"{product.get('short_description', '')}{product.get('description', '')}",
                 permalink or url,
             ),
+            "raw_description_text": _split_description_and_specs(
+                f"{product.get('short_description', '')}{product.get('description', '')}")[0],
+            "raw_specification_text": _split_description_and_specs(
+                f"{product.get('short_description', '')}{product.get('description', '')}")[1],
         }
 
     return None
@@ -487,6 +539,8 @@ async def _shopify_predictive_search_fallback(
             "raw_description_images": _description_images(
                 product.get("body"), product_url
             ),
+            "raw_description_text": _split_description_and_specs(product.get("body"))[0],
+            "raw_specification_text": _split_description_and_specs(product.get("body"))[1],
         }
 
     return None
@@ -584,6 +638,8 @@ async def _shopify_catalog_scan_fallback(
                     product.get("body_html"),
                     f"https://{domain}/products/{handle}" if handle else url,
                 ),
+                "raw_description_text": _split_description_and_specs(product.get("body_html"))[0],
+                "raw_specification_text": _split_description_and_specs(product.get("body_html"))[1],
             }
 
         if len(products) < _SHOPIFY_CATALOG_PAGE_LIMIT:
