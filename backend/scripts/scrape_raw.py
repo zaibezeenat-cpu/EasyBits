@@ -29,6 +29,7 @@ import csv
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -103,7 +104,7 @@ class RawRow:
         }
 
 
-def _pick_best(docs: list[dict]) -> dict | None:
+def _pick_best(docs: list[dict[str, Any]]) -> dict[str, Any] | None:
     """
     The ONE source that fills this row.
 
@@ -118,7 +119,7 @@ def _pick_best(docs: list[dict]) -> dict | None:
     and leave it blank -- the next-best source that DID return something
     takes it instead.
     """
-    def usable_text(doc: dict) -> str:
+    def usable_text(doc: dict[str, Any]) -> str:
         return (doc.get("raw_description_text")
                 or doc.get("raw_specification_text")
                 or doc.get("content")
@@ -133,7 +134,11 @@ def _pick_best(docs: list[dict]) -> dict | None:
     )
 
 
-def _build_title(raw: RawProductInput, docs: list[dict], best: dict | None) -> str:
+def _build_title(
+    raw: RawProductInput,
+    docs: list[dict[str, Any]],
+    best: dict[str, Any] | None,
+) -> str:
     """
     Best-effort title using the SAME Boss-Rule builders the real pipeline
     uses -- and no LLM: harvest_title_terms only needs titles plus a fact
