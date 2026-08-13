@@ -656,10 +656,13 @@ async def _official_out_of_stock_fallback(
     being found. Root cause: many storefront platforms (Shopify, WooCommerce,
     Magento defaults) exclude out-of-stock items from their OWN on-site
     search results -- so a real, live product page returns nothing from
-    every search URL pattern tried, and the existing bail-out logic above
-    reads "search works (brand appears), model doesn't" as proof the domain
-    does not stock it. For an out-of-stock item that inference is wrong: the
-    page exists, it just isn't in the search index.
+    every search URL pattern tried, which is exactly what the bail-out logic
+    above sees before it gives up on the domain. "Brand appears, model
+    doesn't" is not proof the domain lacks the product -- out of stock is
+    one of several explanations (a wrong domain in the config and a model
+    number spelled differently on the site are others), and it is the one
+    this function can actually do something about: the page exists, it just
+    isn't in the search index.
 
     2026-08-10: WooCommerce Store API and Shopify predictive search
     (tiers 1-2 below) are now ALSO tried up front by
@@ -733,7 +736,9 @@ async def _official_out_of_stock_fallback(
 
         logger.info(
             f"Found {brand_name} {model_number} on {domain} via Google site-search "
-            f"after the site's own search excluded it (likely out of stock): {url}"
+            f"even though the site's own search did not return it (out of stock and "
+            f"hidden from the search index is the usual reason, but the page being "
+            f"missing from that index is all we actually observed): {url}"
         )
         return {
             "url": result.url or url,
@@ -994,8 +999,12 @@ async def scrape_product(
                     # Domain bail-out: if the search page loaded successfully AND
                     # mentions the brand name (proof the search engine is working on
                     # this domain, not just returning an error/empty page), but does
-                    # NOT mention our model number, this domain has confirmed it does
-                    # not stock this product. Skip all remaining URL patterns for it.
+                    # NOT mention our model number, then this domain's search did not
+                    # return the model. That is all it tells us -- WHY it did not is
+                    # unknown (out of stock, wrong domain configured, the model number
+                    # spelled differently in the sheet, or the site's search box not
+                    # matching it), so nothing here is logged as proof of absence.
+                    # Skip all remaining URL patterns for it either way.
                     #
                     # WHY THIS IS SAFE: we only bail when the brand appears in content,
                     # ruling out the case where a pattern returned the wrong platform's
@@ -1011,13 +1020,16 @@ async def scrape_product(
                     brand_token = re.split(r"[^a-zA-Z0-9]", brand_name)[0] if brand_name else brand_name
                     if search_result_mentions_product(result.content, brand_token):
                         logger.info(
-                            f"Domain {domain} (pass {pass_num}): search works (mentions "
-                            f"'{brand_name}') but '{model_number}' is not stocked there. "
+                            f"Domain {domain} (pass {pass_num}): search ran (page mentions "
+                            f"'{brand_name}') but '{model_number}' was not in its results. "
+                            f"Could be out of stock, the wrong domain for this brand, a "
+                            f"model number written differently than on the site, or a search "
+                            f"box that does not match it -- unknown from here. "
                             f"Skipping {len(candidates) - candidates.index(source) - 1} "
                             f"remaining URL pattern(s) for this domain."
                         )
                         # 2026-08-09 (owner-directed, official domains only): before
-                        # accepting "search says not stocked" as final, try the
+                        # accepting "the site's search did not return it" as final, try the
                         # out-of-stock fallback -- see _official_out_of_stock_fallback's
                         # docstring for why the site's OWN search is not reliable proof
                         # of absence for an out-of-stock item. Only worth the extra
@@ -1094,8 +1106,12 @@ async def scrape_product(
                     brand_token = re.split(r"[^a-zA-Z0-9]", brand_name)[0] if brand_name else brand_name
                     if result.content and search_result_mentions_product(result.content, brand_token):
                         logger.info(
-                            f"Search page on {domain} confirmed working (mentions '{brand_token}') "
-                            f"but '{model_number}' detail page not found. Bailing out of remaining candidate patterns."
+                            f"Search page on {domain} loaded and mentions '{brand_token}', but no "
+                            f"detail page for '{model_number}' was reachable from its results. "
+                            f"Could be out of stock, the wrong domain for this brand, a model "
+                            f"number written differently than on the site, or a search box that "
+                            f"does not match it -- unknown from here. "
+                            f"Bailing out of remaining candidate patterns."
                         )
                         # Same out-of-stock fallback as the other bail-out above --
                         # see _official_out_of_stock_fallback's docstring.
@@ -1167,8 +1183,10 @@ async def scrape_product(
                 detail=(
                     f"Tried {attempted} search URL(s) across {len(by_domain)} source(s) for "
                     f"{brand_name} {model_number}; none returned a page mentioning the model "
-                    f"number. The product may not be listed on the configured sources, or the "
-                    f"sites were unreachable."
+                    f"number. Why is unknown from here: the product may be out of stock or "
+                    f"unlisted, the configured domain(s) may be wrong for this brand, the model "
+                    f"number may be written differently on the sites, or the sites were "
+                    f"unreachable."
                 ),
             )
         }
