@@ -210,6 +210,93 @@ def _normalise_for_match(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (text or "").lower())
 
 
+# --- Raw image/price capture from the platform JSON (2026-08-12) -----------
+#
+# These endpoints already return real image URLs and prices in the SAME
+# response the fast path parses -- the code just never read those keys. That
+# meant genuinely reliable, structured data was thrown away, and the pipeline
+# was left inferring images from text that had had every <img> tag stripped
+# out of it by _clean_html_to_text. Reading them costs nothing: no extra
+# request, no extra latency.
+#
+# Every helper below is total: any missing/odd-shaped field yields [] or
+# None rather than raising, because these are OPTIONAL extras -- a site that
+# returns none of them must keep working exactly as it did before.
+
+
+def _woo_images(product: dict[str, Any]) -> list[str]:
+    """WooCommerce Store API: `images` is a list of {src, thumbnail, ...}."""
+    images = product.get("images")
+    if not isinstance(images, list):
+        return []
+    return [str(i["src"]) for i in images if isinstance(i, dict) and i.get("src")]
+
+
+def _woo_price(product: dict[str, Any]) -> str | None:
+    """
+    WooCommerce Store API prices are MINOR UNITS as a string ("285000" with
+    currency_minor_unit=2 means 2850.00), so the raw integer is meaningless
+    on its own and must be scaled before it is shown to anyone.
+    """
+    prices = product.get("prices")
+    if not isinstance(prices, dict):
+        return None
+    raw = prices.get("price")
+    if raw in (None, ""):
+        return None
+    try:
+        # Clamped to a sane range, and the FORMAT is inside the guard too:
+        # a negative currency_minor_unit makes the format spec itself invalid
+        # ("Format specifier missing precision"), which would otherwise raise
+        # straight out of a function documented as never raising -- through
+        # two unguarded call frames -- aborting the product's entire scrape
+        # over a malformed price field. Review-flagged, 2026-08-12.
+        minor = int(prices.get("currency_minor_unit", 2))
+        if not 0 <= minor <= 8:
+            # Out of range means we do NOT know how to scale this number.
+            # Returning it unscaled would be a confidently-wrong price (100x
+            # off for a cents value); the raw string is at least honest.
+            raise ValueError(f"implausible currency_minor_unit: {minor}")
+        value = int(str(raw)) / (10 ** minor)
+        formatted = f"{value:.{minor}f}"
+    except (TypeError, ValueError):
+        return str(raw)
+    currency = str(prices.get("currency_code") or "").strip()
+    return f"{formatted} {currency}".strip()
+
+
+def _shopify_images(product: dict[str, Any]) -> list[str]:
+    """Shopify returns either a single `image` string (predictive search) or
+    an `images` list of {src} objects (catalog scan) -- handle both."""
+    single = product.get("image")
+    if isinstance(single, str) and single.strip():
+        return [single.strip()]
+    images = product.get("images")
+    if not isinstance(images, list):
+        return []
+    out: list[str] = []
+    for image in images:
+        if isinstance(image, dict) and image.get("src"):
+            out.append(str(image["src"]))
+        elif isinstance(image, str) and image.strip():
+            out.append(image.strip())
+    return out
+
+
+def _shopify_price(product: dict[str, Any]) -> str | None:
+    """Predictive search puts `price` on the product; the catalog endpoint
+    puts it on each variant instead. Already a decimal string in both."""
+    direct = product.get("price")
+    if direct not in (None, ""):
+        return str(direct)
+    variants = product.get("variants")
+    if isinstance(variants, list):
+        for variant in variants:
+            if isinstance(variant, dict) and variant.get("price") not in (None, ""):
+                return str(variant["price"])
+    return None
+
+
 async def _woocommerce_store_api_fallback(
     domain: str, model_number: str, *, source_type: str
 ) -> dict[str, Any] | None:
@@ -277,6 +364,8 @@ async def _woocommerce_store_api_fallback(
             "source_type": source_type,
             "content": content,
             "candidate_titles": [name] if name else [],
+            "raw_images": _woo_images(product),
+            "raw_price": _woo_price(product),
         }
 
     return None
@@ -350,6 +439,8 @@ async def _shopify_predictive_search_fallback(
             "source_type": source_type,
             "content": content,
             "candidate_titles": [title] if title else [],
+            "raw_images": _shopify_images(product),
+            "raw_price": _shopify_price(product),
         }
 
     return None
@@ -441,6 +532,8 @@ async def _shopify_catalog_scan_fallback(
                 "source_type": "official",
                 "content": content,
                 "candidate_titles": [title] if title else [],
+                "raw_images": _shopify_images(product),
+                "raw_price": _shopify_price(product),
             }
 
         if len(products) < _SHOPIFY_CATALOG_PAGE_LIMIT:

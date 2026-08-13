@@ -1214,3 +1214,170 @@ async def test_fast_path_accepts_a_trusted_secondary_retailer_on_model_match_alo
 
     assert "failure" not in result
     assert result["scraped_data"][0]["source_type"] == "trusted_secondary"
+
+
+# --- Raw JSON fields already fetched but never read (2026-08-12) -----------
+#
+# The WooCommerce Store API and Shopify endpoints already return `images` and
+# price data in the SAME response the fast path parses -- it just never read
+# those keys, so real, reliable image URLs and prices were thrown away and
+# the pipeline was left guessing images from text that had every <img> tag
+# stripped out of it. Capturing them costs nothing: no extra request.
+
+
+@pytest.mark.asyncio
+async def test_woocommerce_fast_path_captures_images_and_price(monkeypatch):
+    payload = [{
+        "name": "Anex AG-01 Chopper", "sku": "AG-01",
+        "permalink": "https://anex.pk/product/ag-01/",
+        "short_description": "Manual chopper.", "description": "Chops onion.",
+        "is_in_stock": True,
+        "images": [
+            {"src": "https://anex.pk/img/ag-01-1.jpg"},
+            {"src": "https://anex.pk/img/ag-01-2.jpg"},
+        ],
+        "prices": {"price": "285000", "currency_minor_unit": 2, "currency_code": "PKR"},
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    result = await orchestrator._woocommerce_store_api_fallback(
+        "anex.pk", "AG-01", source_type="official"
+    )
+    assert result["raw_images"] == [
+        "https://anex.pk/img/ag-01-1.jpg", "https://anex.pk/img/ag-01-2.jpg",
+    ]
+    assert result["raw_price"] == "2850.00 PKR", "minor units must be applied"
+
+
+@pytest.mark.asyncio
+async def test_shopify_predictive_fast_path_captures_image_and_price(monkeypatch):
+    payload = {"resources": {"results": {"products": [{
+        "title": "Anex AG-01 Chopper", "handle": "anex-ag-01",
+        "url": "/products/anex-ag-01", "body": "Chops onion.",
+        "available": True,
+        "image": "https://anex.pk/img/ag-01.jpg",
+        "price": "2850.00",
+    }]}}}
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    result = await orchestrator._shopify_predictive_search_fallback(
+        "anex.pk", "AG-01", source_type="official"
+    )
+    assert result["raw_images"] == ["https://anex.pk/img/ag-01.jpg"]
+    assert result["raw_price"] == "2850.00"
+
+
+@pytest.mark.asyncio
+async def test_shopify_catalog_scan_captures_images_and_variant_price(monkeypatch):
+    payload = {"products": [{
+        "title": "Anex AG-01 Chopper", "handle": "anex-ag-01",
+        "body_html": "<p>Chops onion.</p>",
+        "images": [{"src": "https://anex.pk/img/ag-01-1.jpg"}],
+        "variants": [{"available": True, "price": "2850.00"}],
+    }]}
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    result = await orchestrator._shopify_catalog_scan_fallback("anex.pk", "AG-01")
+    assert result["raw_images"] == ["https://anex.pk/img/ag-01-1.jpg"]
+    assert result["raw_price"] == "2850.00"
+
+
+@pytest.mark.asyncio
+async def test_missing_image_and_price_fields_are_empty_never_crash(monkeypatch):
+    """A site that returns none of these keys must still work exactly as
+    before -- they are additive extras, never required."""
+    payload = [{
+        "name": "Anex AG-01", "sku": "AG-01",
+        "permalink": "https://anex.pk/product/ag-01/",
+        "short_description": "x", "description": "y", "is_in_stock": True,
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+
+    result = await orchestrator._woocommerce_store_api_fallback(
+        "anex.pk", "AG-01", source_type="official"
+    )
+    assert result is not None
+    assert result["raw_images"] == []
+    assert result["raw_price"] is None
+
+
+# --- The four raw-capture helpers, tested DIRECTLY (review-recommended) ----
+#
+# These are pure, synchronous, total-by-design functions. Reaching them only
+# through an AsyncClient monkeypatch (as the tests above do) is the wrong
+# altitude for proving totality -- and testing them directly is what caught
+# the negative-currency_minor_unit crash. Every case below is a shape a real
+# API could plausibly return.
+
+
+@pytest.mark.parametrize("product,expected", [
+    ({}, []),
+    ({"images": None}, []),
+    ({"images": "not-a-list"}, []),
+    ({"images": {}}, []),
+    ({"images": [None, 5, {}, {"src": None}]}, []),
+    ({"images": [{"src": "https://a.pk/1.jpg"}]}, ["https://a.pk/1.jpg"]),
+])
+def test_woo_images_is_total(product, expected):
+    assert orchestrator._woo_images(product) == expected
+
+
+@pytest.mark.parametrize("prices,expected", [
+    (None, None),
+    ("not-a-dict", None),
+    ({}, None),
+    ({"price": None}, None),
+    ({"price": ""}, None),
+    # The arithmetic the code comment calls out as subtle -- 0 and 3 were
+    # untested before, so a JPY (no minor unit) regression would have shipped.
+    ({"price": "2850", "currency_minor_unit": 0, "currency_code": "JPY"}, "2850 JPY"),
+    ({"price": "285000", "currency_minor_unit": 2, "currency_code": "PKR"}, "2850.00 PKR"),
+    ({"price": "2850000", "currency_minor_unit": 3, "currency_code": "BHD"}, "2850.000 BHD"),
+    ({"price": "285000", "currency_minor_unit": "2"}, "2850.00"),   # string int
+    ({"price": "285000"}, "2850.00"),                                # defaults to 2
+    ({"price": "abc"}, "abc"),                                       # unparseable -> passthrough
+    # Would previously RAISE out of a "never raises" function. An
+    # implausible minor unit means we cannot scale it, so the raw string
+    # is returned unchanged rather than a confidently-wrong number.
+    ({"price": "285000", "currency_minor_unit": -1}, "285000"),
+    ({"price": "285000", "currency_minor_unit": 99}, "285000"),
+])
+def test_woo_price_is_total(prices, expected):
+    assert orchestrator._woo_price({"prices": prices}) == expected
+
+
+@pytest.mark.parametrize("product,expected", [
+    ({}, []),
+    ({"image": ""}, []),
+    ({"image": "https://a.pk/1.jpg"}, ["https://a.pk/1.jpg"]),
+    ({"images": "not-a-list"}, []),
+    ({"images": [{"src": "https://a.pk/1.jpg"}, "https://a.pk/2.jpg", None, 7]},
+     ["https://a.pk/1.jpg", "https://a.pk/2.jpg"]),
+])
+def test_shopify_images_is_total(product, expected):
+    assert orchestrator._shopify_images(product) == expected
+
+
+@pytest.mark.parametrize("product,expected", [
+    ({}, None),
+    ({"price": ""}, None),
+    ({"price": "2850.00"}, "2850.00"),
+    ({"price": 2850.0}, "2850.0"),
+    ({"variants": []}, None),
+    ({"variants": "not-a-list"}, None),
+    ({"variants": [None, {}, {"price": "2850.00"}]}, "2850.00"),
+])
+def test_shopify_price_is_total(product, expected):
+    assert orchestrator._shopify_price(product) == expected
