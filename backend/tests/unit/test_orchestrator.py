@@ -1381,3 +1381,68 @@ def test_shopify_images_is_total(product, expected):
 ])
 def test_shopify_price_is_total(product, expected):
     assert orchestrator._shopify_price(product) == expected
+
+
+# --- Images embedded INSIDE the description (2026-08-12) -------------------
+#
+# Distinct from the gallery images captured above. The platform JSON hands us
+# the description as RAW HTML (WooCommerce `description`, Shopify `body_html`/
+# `body`) -- which still contains its <img> tags at that moment. The pipeline
+# then runs _clean_html_to_text() over it, which strips every tag, so those
+# URLs were destroyed before anything could see them. Reading them out first
+# costs one extra parse of a string already in memory: no extra request.
+
+
+@pytest.mark.parametrize("html,base,expected", [
+    ("", "https://anex.pk", []),
+    (None, "https://anex.pk", []),
+    ("<p>no images here</p>", "https://anex.pk", []),
+    ("<img src='https://cdn.anex.pk/a.jpg'>", "https://anex.pk",
+     ["https://cdn.anex.pk/a.jpg"]),
+    # Relative and protocol-relative URLs must be made absolute, or the link
+    # is useless outside the page it came from.
+    ("<img src='/media/a.jpg'>", "https://anex.pk/products/ag-1",
+     ["https://anex.pk/media/a.jpg"]),
+    ("<img src='//cdn.anex.pk/a.jpg'>", "https://anex.pk", ["https://cdn.anex.pk/a.jpg"]),
+    # Duplicates collapse, order preserved.
+    ("<img src='/a.jpg'><img src='/b.jpg'><img src='/a.jpg'>", "https://anex.pk",
+     ["https://anex.pk/a.jpg", "https://anex.pk/b.jpg"]),
+    # Tracking pixels / data URIs / empty src are not product images.
+    ("<img src=''><img src='data:image/gif;base64,R0lGOD'>", "https://anex.pk", []),
+])
+def test_description_images_extraction(html, base, expected):
+    assert orchestrator._description_images(html, base) == expected
+
+
+@pytest.mark.asyncio
+async def test_woocommerce_captures_description_images(monkeypatch):
+    payload = [{
+        "name": "Anex AG-01", "sku": "AG-01",
+        "permalink": "https://anex.pk/product/ag-01/",
+        "short_description": "Chopper.",
+        "description": "<p>Details</p><img src='/media/diagram.jpg'>",
+        "is_in_stock": True,
+    }]
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+    result = await orchestrator._woocommerce_store_api_fallback(
+        "anex.pk", "AG-01", source_type="official"
+    )
+    assert result["raw_description_images"] == ["https://anex.pk/media/diagram.jpg"]
+
+
+@pytest.mark.asyncio
+async def test_shopify_catalog_captures_description_images(monkeypatch):
+    payload = {"products": [{
+        "title": "Anex AG-01", "handle": "anex-ag-01",
+        "body_html": "<p>Details</p><img src='https://cdn.anex.pk/d.jpg'>",
+        "variants": [],
+    }]}
+    monkeypatch.setattr(
+        orchestrator.httpx, "AsyncClient",
+        lambda **kw: _FakeHttpxClient(_FakeResponse(200, payload)),
+    )
+    result = await orchestrator._shopify_catalog_scan_fallback("anex.pk", "AG-01")
+    assert result["raw_description_images"] == ["https://cdn.anex.pk/d.jpg"]

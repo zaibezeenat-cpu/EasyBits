@@ -1,9 +1,10 @@
 import logging
 import re
 from typing import Any
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urljoin, urlparse
 
 import httpx
+from bs4 import BeautifulSoup
 
 from app.core.config import settings
 from app.models.failure import FailureInfo
@@ -283,6 +284,44 @@ def _shopify_images(product: dict[str, Any]) -> list[str]:
     return out
 
 
+def _description_images(description_html: str | None, base_url: str) -> list[str]:
+    """
+    Image URLs embedded INSIDE the product description.
+
+    Distinct from the gallery images above: these are the diagrams and
+    feature shots a brand puts in the description body itself. The platform
+    JSON hands the description over as raw HTML -- still carrying its <img>
+    tags at that moment -- and the pipeline then runs _clean_html_to_text()
+    over it, which strips every tag and destroys these URLs before anything
+    can read them. Extracting them first costs one extra parse of a string
+    already in memory: no extra request, no extra latency.
+
+    Relative ("/media/a.jpg") and protocol-relative ("//cdn/a.jpg") srcs are
+    resolved against base_url -- an unresolved relative URL is useless
+    outside the page it came from. Duplicates collapse, order preserved.
+    data: URIs are skipped: those are inline tracking pixels and spacers,
+    never a real product image anyone can link to.
+    """
+    if not description_html or not str(description_html).strip():
+        return []
+    try:
+        soup = BeautifulSoup(str(description_html), "html.parser")
+    except Exception:  # noqa: BLE001 -- malformed markup must never abort a scrape
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in soup.find_all("img"):
+        src = str(tag.get("src") or "").strip()
+        if not src or src.lower().startswith("data:"):
+            continue
+        absolute = urljoin(base_url, src)
+        if absolute not in seen:
+            seen.add(absolute)
+            out.append(absolute)
+    return out
+
+
 def _shopify_price(product: dict[str, Any]) -> str | None:
     """Predictive search puts `price` on the product; the catalog endpoint
     puts it on each variant instead. Already a decimal string in both."""
@@ -366,6 +405,10 @@ async def _woocommerce_store_api_fallback(
             "candidate_titles": [name] if name else [],
             "raw_images": _woo_images(product),
             "raw_price": _woo_price(product),
+            "raw_description_images": _description_images(
+                f"{product.get('short_description', '')}{product.get('description', '')}",
+                permalink or url,
+            ),
         }
 
     return None
@@ -441,6 +484,9 @@ async def _shopify_predictive_search_fallback(
             "candidate_titles": [title] if title else [],
             "raw_images": _shopify_images(product),
             "raw_price": _shopify_price(product),
+            "raw_description_images": _description_images(
+                product.get("body"), product_url
+            ),
         }
 
     return None
@@ -534,6 +580,10 @@ async def _shopify_catalog_scan_fallback(
                 "candidate_titles": [title] if title else [],
                 "raw_images": _shopify_images(product),
                 "raw_price": _shopify_price(product),
+                "raw_description_images": _description_images(
+                    product.get("body_html"),
+                    f"https://{domain}/products/{handle}" if handle else url,
+                ),
             }
 
         if len(products) < _SHOPIFY_CATALOG_PAGE_LIMIT:
