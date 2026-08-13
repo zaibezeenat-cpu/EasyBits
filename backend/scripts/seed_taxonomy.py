@@ -13,16 +13,38 @@ Brand/category lists per the V3.0 Production CSV Blueprint (supersedes the
 earlier phase1.md §9.1/§9.2 draft lists -- `Gaba National` is a real brand
 confirmed present in the live catalog's own sample export).
 """
+
 import asyncio
 
 from app.db.supabase_client import get_supabase
 
 # --- Brands (exact casing preserved, per the locked taxonomy rule) ---
 BRANDS = [
-    "Anex", "Boss", "DAWLANCE", "EcoStar", "ELite", "Gaba National", "GFC", "GREE",
-    "HAIER", "Hanco", "Homage", "Hotline", "Kenwood", "Login", "Midea", "NASGAS",
-    "ORIENT", "Panasonic", "PEL", "Philips", "Royal Fans", "SG", "Super Asia",
-    "TCL", "WestPoint Pakistan",
+    "Anex",
+    "Boss",
+    "DAWLANCE",
+    "EcoStar",
+    "ELite",
+    "Gaba National",
+    "GFC",
+    "GREE",
+    "HAIER",
+    "Hanco",
+    "Homage",
+    "Hotline",
+    "Kenwood",
+    "Login",
+    "Midea",
+    "NASGAS",
+    "ORIENT",
+    "Panasonic",
+    "PEL",
+    "Philips",
+    "Royal Fans",
+    "SG",
+    "Super Asia",
+    "TCL",
+    "WestPoint Pakistan",
 ]
 
 # --- Official brand websites -------------------------------------------------
@@ -58,7 +80,7 @@ BRAND_OFFICIAL_SITES: dict[str, str] = {
     "NASGAS": "https://nasgas.com",
     "ORIENT": "https://orient.com.pk",
     "Panasonic": "https://panasonic.com",
-    "PEL": "https://pel.com.pk",
+    "PEL": "https://eshop.pel.com.pk/",
     "Philips": "https://philipsappliances.pk",
     "Royal Fans": "https://royalfans.com",
     "SG": "https://sghomeappliance.com.pk",
@@ -78,19 +100,51 @@ BRAND_OFFICIAL_SITES: dict[str, str] = {
 # (never existed on the live site). A category not on this list routes the
 # product to Manual Review -- never created on the fly, since a stray taxonomy
 # term silently creates a new term in live WooCommerce on import.
-TOP_LEVEL = ["Beauty", "Garment Streamer", "Home Appliance", "Item", "Kitchen Appliances"]
+TOP_LEVEL = [
+    "Beauty",
+    "Garment Streamer",
+    "Home Appliance",
+    "Item",
+    "Kitchen Appliances",
+]
 
 HOME_APPLIANCE_CHILDREN = [
-    "Air conditioner", "Air cooler", "Air Purifier", "Deep Freezer",
-    "Deerma", "Fans", "Garment Steam Iron", "Geyser", "Heater", "Insect Killer",
-    "Led TV", "Microwave Oven", "Refrigerator", "Vacuum Cleaner", "Washing machine",
-    "Water Dispenser"
+    "Air conditioner",
+    "Air cooler",
+    "Air Purifier",
+    "Deep Freezer",
+    "Deerma",
+    "Fans",
+    "Garment Steam Iron",
+    "Geyser",
+    "Heater",
+    "Insect Killer",
+    "Led TV",
+    "Microwave Oven",
+    "Refrigerator",
+    "Vacuum Cleaner",
+    "Washing machine",
+    "Water Dispenser",
 ]
 
 KITCHEN_APPLIANCE_CHILDREN = [
-    "Air Fryer", "Blender", "Chopper", "Coffee Maker", "Cooker", "Electric Kettle",
-    "Food Processor", "Hotplate", "Juicer", "Grinder", "Mixer", "Oven Toaster",
-    "Pizza Pan", "Roti Maker", "Toaster", "Hand Chopper", "Hand Blender"
+    "Air Fryer",
+    "Blender",
+    "Chopper",
+    "Coffee Maker",
+    "Cooker",
+    "Electric Kettle",
+    "Food Processor",
+    "Hotplate",
+    "Juicer",
+    "Grinder",
+    "Mixer",
+    "Oven Toaster",
+    "Pizza Pan",
+    "Roti Maker",
+    "Toaster",
+    "Hand Chopper",
+    "Hand Blender",
 ]
 
 # --- Category spec schemas -------------------------------------------------
@@ -112,79 +166,112 @@ def _spec(*specs: tuple[str, str, bool]) -> list[dict]:
         {"key": "brand", "label": "Brand", "required": True},
         {"key": "model_number", "label": "Model Number", "required": True},
     ]
-    return base + [{"key": k, "label": label, "required": req} for k, label, req in specs]
+    return base + [
+        {"key": k, "label": label, "required": req} for k, label, req in specs
+    ]
 
 
 SPEC_SCHEMAS = {
     # --- Beauty / personal care (heterogeneous, so only the type is required) ---
     "Beauty": _spec(
-        ("appliance_type", "Appliance Type", True), ("wattage", "Wattage", False),
-        ("voltage", "Voltage", False), ("material", "Plate / Body Material", False),
-        ("temperature", "Temperature Range", False), ("features", "Features", False),
+        ("appliance_type", "Appliance Type", True),
+        ("wattage", "Wattage", False),
+        ("voltage", "Voltage", False),
+        ("material", "Plate / Body Material", False),
+        ("temperature", "Temperature Range", False),
+        ("features", "Features", False),
     ),
     # --- Cooling & refrigeration ---
     "Air conditioner": _spec(
-        ("ac_type", "AC Type", True), ("capacity", "Capacity", True),
-        ("functions", "Functions", False), ("compressor_technology", "Compressor Technology", False),
-        ("smart_features", "Smart Features", False), ("refrigerant", "Refrigerant", False),
+        ("ac_type", "AC Type", True),
+        ("capacity", "Capacity", True),
+        ("functions", "Functions", False),
+        ("compressor_technology", "Compressor Technology", False),
+        ("smart_features", "Smart Features", False),
+        ("refrigerant", "Refrigerant", False),
     ),
     "Refrigerator": _spec(
-        ("refrigerator_type", "Refrigerator Type", True), ("capacity", "Capacity", True),
+        ("refrigerator_type", "Refrigerator Type", True),
+        ("capacity", "Capacity", True),
         ("exterior_finish", "Exterior Finish", False),
         ("compressor_technology", "Compressor Technology", False),
         ("refrigerant", "Refrigerant", False),
     ),
     "Deep Freezer": _spec(
-        ("freezer_type", "Freezer Type", True), ("capacity", "Capacity", True),
+        ("freezer_type", "Freezer Type", True),
+        ("capacity", "Capacity", True),
         ("exterior_finish", "Exterior Finish", False),
-        ("compressor_technology", "Compressor Technology", False), ("features", "Features", False),
+        ("compressor_technology", "Compressor Technology", False),
+        ("features", "Features", False),
     ),
     "Air cooler": _spec(
-        ("capacity", "Water Tank Capacity", True), ("air_throw", "Air Throw", False),
-        ("power_consumption", "Power Consumption", False), ("features", "Features", False),
+        ("capacity", "Water Tank Capacity", True),
+        ("air_throw", "Air Throw", False),
+        ("power_consumption", "Power Consumption", False),
+        ("features", "Features", False),
     ),
     "Air Purifier": _spec(
-        ("coverage_area", "Coverage Area", True), ("filter_type", "Filter Type", False),
-        ("cadr", "CADR", False), ("features", "Features", False),
+        ("coverage_area", "Coverage Area", True),
+        ("filter_type", "Filter Type", False),
+        ("cadr", "CADR", False),
+        ("features", "Features", False),
     ),
     "Water Dispenser": _spec(
-        ("dispenser_type", "Type", True), ("taps", "Number of Taps", False),
-        ("functions", "Functions", False), ("features", "Features", False),
+        ("dispenser_type", "Type", True),
+        ("taps", "Number of Taps", False),
+        ("functions", "Functions", False),
+        ("features", "Features", False),
     ),
     # --- Kitchen: cooking ---
     "Microwave Oven": _spec(
-        ("appliance_type", "Appliance Type", True), ("capacity", "Capacity", True),
-        ("control_panel", "Control Panel", False), ("features", "Features", False),
+        ("appliance_type", "Appliance Type", True),
+        ("capacity", "Capacity", True),
+        ("control_panel", "Control Panel", False),
+        ("features", "Features", False),
     ),
     "Air Fryer": _spec(
-        ("capacity", "Capacity", True), ("wattage", "Wattage", True),
-        ("control_type", "Control Type", False), ("features", "Features", False),
+        ("capacity", "Capacity", True),
+        ("wattage", "Wattage", True),
+        ("control_type", "Control Type", False),
+        ("features", "Features", False),
     ),
     "Oven Toaster": _spec(
-        ("capacity", "Capacity", True), ("wattage", "Wattage", True),
-        ("functions", "Functions", False), ("features", "Features", False),
+        ("capacity", "Capacity", True),
+        ("wattage", "Wattage", True),
+        ("functions", "Functions", False),
+        ("features", "Features", False),
     ),
     "Hotplate": _spec(
-        ("burners", "Number of Burners", True), ("wattage", "Wattage", False),
-        ("plate_type", "Plate Type", False), ("features", "Features", False),
+        ("burners", "Number of Burners", True),
+        ("wattage", "Wattage", False),
+        ("plate_type", "Plate Type", False),
+        ("features", "Features", False),
     ),
     "Coffee Maker": _spec(
-        ("coffee_maker_type", "Type", True), ("capacity", "Capacity", True),
-        ("wattage", "Wattage", False), ("features", "Features", False),
+        ("coffee_maker_type", "Type", True),
+        ("capacity", "Capacity", True),
+        ("wattage", "Wattage", False),
+        ("features", "Features", False),
     ),
     "Electric Kettle": _spec(
-        ("capacity", "Capacity", True), ("wattage", "Wattage", True),
-        ("body_material", "Body Material", False), ("features", "Features", False),
+        ("capacity", "Capacity", True),
+        ("wattage", "Wattage", True),
+        ("body_material", "Body Material", False),
+        ("features", "Features", False),
     ),
     # --- Kitchen: food prep ---
     "Blender": _spec(
-        ("capacity", "Jar Capacity", True), ("wattage", "Wattage", True),
-        ("speeds", "Speeds", False), ("jar_material", "Jar Material", False),
+        ("capacity", "Jar Capacity", True),
+        ("wattage", "Wattage", True),
+        ("speeds", "Speeds", False),
+        ("jar_material", "Jar Material", False),
         ("features", "Features", False),
     ),
     "Chopper": _spec(
-        ("capacity", "Bowl Capacity", True), ("wattage", "Wattage", True),
-        ("blades", "Blades", False), ("features", "Features", False),
+        ("capacity", "Bowl Capacity", True),
+        ("wattage", "Wattage", True),
+        ("blades", "Blades", False),
+        ("features", "Features", False),
     ),
     # Hand-operated variants: no motor, so no wattage field at all. That is the
     # whole reason they are separate categories -- the electric schemas require a
@@ -251,79 +338,107 @@ SPEC_SCHEMAS = {
     # means "do not block", not "do not extract".
     "Grinder": _spec(
         ("appliance_type", "Appliance Type", True),
-        ("wattage", "Wattage", False), ("grinder_type", "Wet / Dry", False),
-        ("jars", "Jars", False), ("material", "Body / Jar Material", False),
+        ("wattage", "Wattage", False),
+        ("grinder_type", "Wet / Dry", False),
+        ("jars", "Jars", False),
+        ("material", "Body / Jar Material", False),
         ("features", "Features", False),
     ),
     "Juicer": _spec(
         ("appliance_type", "Appliance Type", True),
-        ("wattage", "Wattage", False), ("capacity", "Jug Capacity", False),
-        ("speeds", "Speeds", False), ("material", "Body Material", False),
+        ("wattage", "Wattage", False),
+        ("capacity", "Jug Capacity", False),
+        ("speeds", "Speeds", False),
+        ("material", "Body Material", False),
         ("features", "Features", False),
     ),
     "Cooker": _spec(
         ("appliance_type", "Appliance Type", True),
-        ("capacity", "Capacity", False), ("wattage", "Wattage", False),
+        ("capacity", "Capacity", False),
+        ("wattage", "Wattage", False),
         ("material", "Inner Pot Material", False),
         ("features", "Features", False),
     ),
     "Mixer": _spec(
         ("appliance_type", "Appliance Type", True),
-        ("wattage", "Wattage", False), ("capacity", "Bowl Capacity", False),
-        ("speeds", "Speeds", False), ("material", "Bowl Material", False),
+        ("wattage", "Wattage", False),
+        ("capacity", "Bowl Capacity", False),
+        ("speeds", "Speeds", False),
+        ("material", "Bowl Material", False),
         ("features", "Features", False),
     ),
     "Food Processor": _spec(
         ("appliance_type", "Appliance Type", True),
-        ("wattage", "Wattage", False), ("capacity", "Bowl Capacity", False),
-        ("attachments", "Attachments", False), ("features", "Features", False),
+        ("wattage", "Wattage", False),
+        ("capacity", "Bowl Capacity", False),
+        ("attachments", "Attachments", False),
+        ("features", "Features", False),
     ),
     "Roti Maker": _spec(
         ("appliance_type", "Appliance Type", True),
-        ("wattage", "Wattage", False), ("plate_size", "Plate Size", False),
-        ("material", "Plate Material", False), ("features", "Features", False),
+        ("wattage", "Wattage", False),
+        ("plate_size", "Plate Size", False),
+        ("material", "Plate Material", False),
+        ("features", "Features", False),
     ),
     "Pizza Pan": _spec(
         ("appliance_type", "Appliance Type", True),
-        ("wattage", "Wattage", False), ("diameter", "Diameter", False),
-        ("material", "Surface Material", False), ("features", "Features", False),
+        ("wattage", "Wattage", False),
+        ("diameter", "Diameter", False),
+        ("material", "Surface Material", False),
+        ("features", "Features", False),
     ),
     # --- Home appliances ---
     "Fans": _spec(
-        ("fan_type", "Fan Type", True), ("sweep_size", "Sweep Size", False),
-        ("speeds", "Speeds", False), ("power_consumption", "Power Consumption", False),
+        ("fan_type", "Fan Type", True),
+        ("sweep_size", "Sweep Size", False),
+        ("speeds", "Speeds", False),
+        ("power_consumption", "Power Consumption", False),
         ("features", "Features", False),
     ),
     "Garment Steam Iron": _spec(
-        ("iron_type", "Iron Type", True), ("wattage", "Wattage", True),
-        ("steam_output", "Steam Output", False), ("soleplate", "Soleplate", False),
+        ("iron_type", "Iron Type", True),
+        ("wattage", "Wattage", True),
+        ("steam_output", "Steam Output", False),
+        ("soleplate", "Soleplate", False),
         ("features", "Features", False),
     ),
     "Geyser": _spec(
-        ("geyser_type", "Geyser Type", True), ("capacity", "Capacity", True),
+        ("geyser_type", "Geyser Type", True),
+        ("capacity", "Capacity", True),
         ("features", "Features", False),
     ),
     "Heater": _spec(
-        ("heater_type", "Heater Type", True), ("wattage", "Wattage", True),
-        ("coverage_area", "Coverage Area", False), ("features", "Features", False),
+        ("heater_type", "Heater Type", True),
+        ("wattage", "Wattage", True),
+        ("coverage_area", "Coverage Area", False),
+        ("features", "Features", False),
     ),
     "Insect Killer": _spec(
-        ("coverage_area", "Coverage Area", True), ("wattage", "Wattage", False),
-        ("method", "Method", False), ("features", "Features", False),
+        ("coverage_area", "Coverage Area", True),
+        ("wattage", "Wattage", False),
+        ("method", "Method", False),
+        ("features", "Features", False),
     ),
     "Led TV": _spec(
-        ("screen_size", "Screen Size", True), ("resolution", "Resolution", True),
-        ("display_type", "Display Type", False), ("smart_features", "Smart Features", False),
+        ("screen_size", "Screen Size", True),
+        ("resolution", "Resolution", True),
+        ("display_type", "Display Type", False),
+        ("smart_features", "Smart Features", False),
         ("connectivity", "Connectivity", False),
     ),
     "Vacuum Cleaner": _spec(
-        ("vacuum_type", "Type", True), ("capacity", "Dust Capacity", False),
-        ("wattage", "Wattage", False), ("suction_power", "Suction Power", False),
+        ("vacuum_type", "Type", True),
+        ("capacity", "Dust Capacity", False),
+        ("wattage", "Wattage", False),
+        ("suction_power", "Suction Power", False),
         ("features", "Features", False),
     ),
     "Washing machine": _spec(
-        ("washing_machine_type", "Type", True), ("capacity", "Capacity", True),
-        ("wash_programs", "Wash Programs", False), ("spin_speed", "Spin Speed", False),
+        ("washing_machine_type", "Type", True),
+        ("capacity", "Capacity", True),
+        ("wash_programs", "Wash Programs", False),
+        ("spin_speed", "Spin Speed", False),
         ("features", "Features", False),
     ),
 }
@@ -343,15 +458,19 @@ async def seed_brands() -> dict[str, str]:
     db = await get_supabase()
     name_to_id = {}
     for name in BRANDS:
-        result = await db.table("brands").upsert(
-            {"name": name, "is_active": True}, on_conflict="name"
-        ).execute()
+        result = (
+            await db.table("brands")
+            .upsert({"name": name, "is_active": True}, on_conflict="name")
+            .execute()
+        )
         name_to_id[name] = result.data[0]["id"]
         print(f"  brand: {name}")
     return name_to_id
 
 
-async def _get_or_create_null_parent_category(name: str, is_active: bool = True, notes: str | None = None) -> str:
+async def _get_or_create_null_parent_category(
+    name: str, is_active: bool = True, notes: str | None = None
+) -> str:
     """
     Postgres treats NULL != NULL in a UNIQUE(name, parent_id) index, so
     `.upsert(..., on_conflict="name,parent_id")` does NOT catch duplicates when
@@ -360,10 +479,21 @@ async def _get_or_create_null_parent_category(name: str, is_active: bool = True,
     schema has no partial unique index on `name WHERE parent_id IS NULL`.
     """
     db = await get_supabase()
-    existing = await db.table("categories").select("id").eq("name", name).is_("parent_id", "null").execute()
+    existing = (
+        await db.table("categories")
+        .select("id")
+        .eq("name", name)
+        .is_("parent_id", "null")
+        .execute()
+    )
     if existing.data:
         return existing.data[0]["id"]
-    payload = {"name": name, "parent_id": None, "is_active": is_active, "needs_confirmation": False}
+    payload = {
+        "name": name,
+        "parent_id": None,
+        "is_active": is_active,
+        "needs_confirmation": False,
+    }
     if notes:
         payload["notes"] = notes
     result = await db.table("categories").insert(payload).execute()
@@ -389,15 +519,19 @@ async def seed_categories() -> dict[str, str]:
     async def seed_children(children: list[str], parent_name: str):
         parent_id = name_to_id[parent_name]
         for name in children:
-            result = await db.table("categories").upsert(
-                {
-                    "name": name,
-                    "parent_id": parent_id,
-                    "is_active": True,
-                    "needs_confirmation": False,
-                },
-                on_conflict="name,parent_id",
-            ).execute()
+            result = (
+                await db.table("categories")
+                .upsert(
+                    {
+                        "name": name,
+                        "parent_id": parent_id,
+                        "is_active": True,
+                        "needs_confirmation": False,
+                    },
+                    on_conflict="name,parent_id",
+                )
+                .execute()
+            )
             name_to_id[name] = result.data[0]["id"]
             print(f"  category: {parent_name} > {name}")
 
@@ -414,17 +548,28 @@ async def seed_spec_schemas(category_ids: dict[str, str]):
     # attached to ALL of them, not just whichever id won the name collision.
     db = await get_supabase()
     for category_name, fields in SPEC_SCHEMAS.items():
-        rows = (await db.table("categories").select("id").eq("name", category_name).execute()).data
+        rows = (
+            await db.table("categories")
+            .select("id")
+            .eq("name", category_name)
+            .execute()
+        ).data
         if not rows:
             print(f"  SKIP schema for '{category_name}' -- category not found")
             continue
         for row in rows:
-            await db.table("category_spec_schemas").upsert(
-                {"category_id": row["id"], "fields": fields + DIMENSION_FIELDS},
-                on_conflict="category_id",
-            ).execute()
-        print(f"  spec schema: {category_name} "
-              f"({len(fields)} visible + 4 dimension fields; {len(rows)} category row(s))")
+            await (
+                db.table("category_spec_schemas")
+                .upsert(
+                    {"category_id": row["id"], "fields": fields + DIMENSION_FIELDS},
+                    on_conflict="category_id",
+                )
+                .execute()
+            )
+        print(
+            f"  spec schema: {category_name} "
+            f"({len(fields)} visible + 4 dimension fields; {len(rows)} category row(s))"
+        )
 
 
 async def seed_brand_official_sites(brand_ids: dict[str, str]):
@@ -441,10 +586,14 @@ async def seed_brand_official_sites(brand_ids: dict[str, str]):
         if not brand_id:
             print(f"  SKIP {brand_name} -- brand not found in taxonomy")
             continue
-        await db.table("brand_domain_aliases").upsert(
-            {"brand_id": brand_id, "official_domain": url, "is_active": True},
-            on_conflict="brand_id",
-        ).execute()
+        await (
+            db.table("brand_domain_aliases")
+            .upsert(
+                {"brand_id": brand_id, "official_domain": url, "is_active": True},
+                on_conflict="brand_id",
+            )
+            .execute()
+        )
         print(f"  official site: {brand_name} -> {url}")
 
     missing = sorted(set(brand_ids) - set(BRAND_OFFICIAL_SITES))
@@ -483,12 +632,18 @@ async def seed_trusted_secondary_sources():
         {"domain": "surmawala.pk", "label": "Surmawala", "priority": 1},
         {"domain": "japanelectronics.pk", "label": "Japan Electronics", "priority": 2},
         {"domain": "pakelectronics.pk", "label": "Pak Electronics", "priority": 3},
-        {"domain": "modernelectronics.pk", "label": "Modern Electronics", "priority": 4},
+        {
+            "domain": "modernelectronics.pk",
+            "label": "Modern Electronics",
+            "priority": 4,
+        },
     ]
     for source in defaults:
-        await db.table("trusted_secondary_sources").upsert(
-            {**source, "is_active": True}, on_conflict="domain"
-        ).execute()
+        await (
+            db.table("trusted_secondary_sources")
+            .upsert({**source, "is_active": True}, on_conflict="domain")
+            .execute()
+        )
         print(f"  trusted secondary source: {source['label']} ({source['domain']})")
 
 
@@ -503,7 +658,9 @@ async def main():
     await seed_spec_schemas(category_ids)
     print("\n--- Seeding Trusted Secondary Sources ---")
     await seed_trusted_secondary_sources()
-    print("\nDone. Remaining categories have NO spec schema by design -- their products")
+    print(
+        "\nDone. Remaining categories have NO spec schema by design -- their products"
+    )
     print("will route to Manual Review (missing_category_schema) until you define one")
     print("via the Taxonomy Manager, right before you actually process that category.")
 

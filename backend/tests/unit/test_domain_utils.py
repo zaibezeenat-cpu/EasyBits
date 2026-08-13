@@ -5,8 +5,8 @@ The failure this guards against is silent: a stored value that is not a bare
 hostname never matches a scraped host, so the brand's official site is skipped
 and the product escalates looking like it simply had no data available.
 """
-import pytest
 
+import pytest
 from app.core.domain_utils import InvalidDomainError, normalize_domain
 
 
@@ -21,7 +21,7 @@ from app.core.domain_utils import InvalidDomainError, normalize_domain
         ("orient.com.pk:443", "orient.com.pk"),
         ("https://user:pass@anex.com.pk", "anex.com.pk"),
         # Tracking params and anchors are not part of a source's identity.
-        ("https://pel.com.pk/?utm_source=x", "pel.com.pk"),
+        ("https://eshop.pel.com.pk/?utm_source=x", "eshop.pel.com.pk"),
         ("https://homage.pk/#top", "homage.pk"),
     ],
 )
@@ -51,7 +51,9 @@ def test_brand_section_path_is_preserved(raw, expected):
 
 def test_two_brands_on_one_host_stay_distinct():
     """The failure this guards: both collapsing to 'dwphome.pk'."""
-    assert normalize_domain("https://dwphome.pk/ecostar") != normalize_domain("https://dwphome.pk/gree")
+    assert normalize_domain("https://dwphome.pk/ecostar") != normalize_domain(
+        "https://dwphome.pk/gree"
+    )
 
 
 def test_a_path_long_enough_to_be_a_product_link_is_rejected():
@@ -69,7 +71,7 @@ def test_a_path_long_enough_to_be_a_product_link_is_rejected():
         "",
         "   ",
         "not a domain",
-        "kenwood",          # no TLD -- cannot match any scraped host
+        "kenwood",  # no TLD -- cannot match any scraped host
         "http://",
         "...",
         "-bad.com",
