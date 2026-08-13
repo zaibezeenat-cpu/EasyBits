@@ -5,8 +5,18 @@ STEP 1: raw product data from the web, as a CSV. No writing, no review.
     python scripts/scrape_raw.py input.csv raw.csv --limit 3
 
 Input is the SAME CSV bulk_run.py takes (parsed by the same code), so there
-is no second format to keep in sync. Category is inferred from the product
-Name when the sheet has no Category column -- deterministic, no LLM.
+is no second format to keep in sync.
+
+COST, stated honestly: scraping itself makes NO LLM call, and only the FREE
+discovery tiers run (the quota-limited Google tier is never used here). The
+ONE exception is category resolution: it is deterministic from the product
+Name for almost every row, but bulk_run's shared parser falls back to a
+small `categorizer` LLM call for a row whose name matches no known category.
+Give the sheet a Category column and even that never fires.
+
+It writes to the `settings` table's search-template cache as a side effect of
+scraping (the same cache the live pipeline maintains) -- it creates no batch
+and no product rows, but it is not strictly read-only.
 
 WHAT THIS GIVES YOU that bulk_run.py does not: the COMPLETE raw description
 and specification text exactly as the site wrote it, the real product and
@@ -40,7 +50,9 @@ from app.builders.title_terms import (  # noqa: E402
     verify_terms,
 )
 from app.models.raw_input import RawProductInput  # noqa: E402
+from app.builders.html_sanitizer import neutralize_csv_formula  # noqa: E402
 from app.scraping.orchestrator import scrape_product  # noqa: E402
+from app.scraping.source_discovery import FREE_TIERS  # noqa: E402
 from scripts.bulk_run import _build_inputs  # noqa: E402
 
 # Matches the codebase's own sentinel (see specs_renderer.py, which filters
@@ -82,7 +94,15 @@ class RawRow:
     source_types: list[str] = field(default_factory=list)
 
     def to_row(self, index: int) -> dict[str, str]:
-        return {
+        """One CSV row.
+
+        Every value passes through neutralize_csv_formula, exactly as
+        csv_assembler.py does at its own file boundary: this file is written
+        with a BOM so Excel opens it on double-click, and a scraped cell
+        starting "+92 300..." (a phone number) or "-40C to 60C" is evaluated
+        as a formula otherwise.
+        """
+        raw = {
             "S.NO": str(index),
             "SKU": self.sku,
             "Brand": self.brand,
@@ -99,9 +119,10 @@ class RawRow:
             "Best Source URL": self.best_source_url or UNKNOWN,
             "Result": self.result,
             "Sources Found": str(len(self.source_urls)),
-            "Source URLs": " | ".join(self.source_urls),
-            "Source Types": " | ".join(self.source_types),
+            "Source URLs": " | ".join(self.source_urls) or UNKNOWN,
+            "Source Types": " | ".join(self.source_types) or UNKNOWN,
         }
+        return {k: neutralize_csv_formula(v) for k, v in raw.items()}
 
 
 def _pick_best(docs: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -120,10 +141,16 @@ def _pick_best(docs: list[dict[str, Any]]) -> dict[str, Any] | None:
     takes it instead.
     """
     def usable_text(doc: dict[str, Any]) -> str:
-        return (doc.get("raw_description_text")
-                or doc.get("raw_specification_text")
-                or doc.get("content")
-                or "")
+        """Everything this source yielded, for the length comparison.
+
+        Deliberately NOT an `or` chain: short-circuiting made a source's spec
+        table worth zero whenever it also had prose, so a doc with 100 chars
+        of prose and a 20,000-char spec table lost to one with 5,000 chars of
+        prose and no specs -- picking the structurally POORER source.
+        """
+        return "\n".join(str(doc.get(k) or "") for k in (
+            "raw_description_text", "raw_specification_text", "content",
+        )).strip()
 
     candidates = [d for d in docs if usable_text(d).strip()]
     if not candidates:
@@ -178,7 +205,12 @@ async def _scrape_one(raw: RawProductInput) -> RawRow:
         category=raw.category_name, warranty=raw.warranty_override or "",
     )
     try:
-        scraped = await scrape_product(raw.brand_name, raw.model_number)
+        # FREE_TIERS only -- the Google tier has a daily quota that
+        # nodes.py deliberately holds back for products the free tiers
+        # failed on. A diagnostic must not be the thing that burns it.
+        scraped = await scrape_product(
+            raw.brand_name, raw.model_number, tiers_to_run=FREE_TIERS
+        )
         if "failure" in scraped:
             out.result = scraped["failure"].category
             return out
@@ -208,7 +240,8 @@ async def _scrape_one(raw: RawProductInput) -> RawRow:
 
 
 async def run(input_path: str, output_path: str, limit: int | None) -> None:
-    rows = list(csv.DictReader(open(input_path, encoding="utf-8-sig")))
+    with open(input_path, encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
     print(f"Read {len(rows)} rows from {input_path}")
 
     inputs, skipped = await _build_inputs(rows)
@@ -222,21 +255,26 @@ async def run(input_path: str, output_path: str, limit: int | None) -> None:
         print("Nothing to scrape.")
         return
 
+    # Written as we go, not at the end: a 300-product run takes hours, and
+    # a Ctrl-C or dropped session at product 290 must not lose all of it.
     results: list[RawRow] = []
+    out_file = open(output_path, "w", encoding="utf-8-sig", newline="")
+    writer = csv.DictWriter(out_file, fieldnames=list(COLUMNS), extrasaction="ignore")
+    writer.writeheader()
+    out_file.flush()
+
     for i, raw in enumerate(inputs, start=1):
         row = await _scrape_one(raw)
         results.append(row)
+        writer.writerow(row.to_row(i))
+        out_file.flush()
         print(f"  [{i}/{len(inputs)}] {row.sku}: {row.result} "
               f"({len(row.source_urls)} source(s), best={row.best_source_type or '-'}, "
               f"desc={len(row.description)} chars, "
               f"specs={'yes' if row.specification else 'no'}, "
               f"imgs={len(row.product_images)}+{len(row.description_images)})")
 
-    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(COLUMNS), extrasaction="ignore")
-        writer.writeheader()
-        for i, row in enumerate(results, start=1):
-            writer.writerow(row.to_row(i))
+    out_file.close()
 
     ok = [r for r in results if r.result == "ok"]
     with_specs = [r for r in ok if r.specification]

@@ -454,13 +454,13 @@ async def _woocommerce_store_api_fallback(
             "raw_images": _woo_images(product),
             "raw_price": _woo_price(product),
             "raw_description_images": _description_images(
-                f"{product.get('short_description', '')}{product.get('description', '')}",
+                f"{product.get('short_description', '')}\n{product.get('description', '')}",
                 permalink or url,
             ),
             "raw_description_text": _split_description_and_specs(
-                f"{product.get('short_description', '')}{product.get('description', '')}")[0],
+                f"{product.get('short_description', '')}\n{product.get('description', '')}")[0],
             "raw_specification_text": _split_description_and_specs(
-                f"{product.get('short_description', '')}{product.get('description', '')}")[1],
+                f"{product.get('short_description', '')}\n{product.get('description', '')}")[1],
         }
 
     return None
