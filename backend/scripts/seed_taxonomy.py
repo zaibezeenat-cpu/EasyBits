@@ -78,7 +78,7 @@ BRAND_OFFICIAL_SITES: dict[str, str] = {
     "Login": "https://login.com.pk/",
     "Midea": "https://mideapakistan.com",
     "NASGAS": "https://nasgas.com",
-    "ORIENT": "https://orient.com.pk",
+    "ORIENT": "https://www.orient.com.pk",
     "Panasonic": "https://panasonic.com",
     "PEL": "https://eshop.pel.com.pk/",
     "Philips": "https://philipsappliances.pk",
