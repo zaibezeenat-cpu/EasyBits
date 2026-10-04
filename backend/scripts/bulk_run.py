@@ -203,6 +203,7 @@ async def _build_inputs(rows: list[dict]) -> tuple[list[RawProductInput], list[s
             regular_price=parsed.regular_price, sale_price=parsed.sale_price,
             warranty_override=parsed.warranty_phrase,
             template_choice=parsed.template_choice or "B",
+            title=name,
             official_url=_pick(row, "Website Link", "Link", "URL", "Product_URL", "External URL") or None,
             source_details=_pick(row, "Details", "Description", "Short description", "Clean_Description_Text", "Original_Item Description") or None,
             existing_id=existing_id or None,

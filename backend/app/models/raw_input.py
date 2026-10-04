@@ -20,6 +20,7 @@ class RawProductInput(BaseModel):
     in_stock: bool = True                        # closes #14 — surfaced by StockStatusToggle.tsx
     warranty_override: str | None = None      # phase1.md §5.5's per-product override
     template_choice: Literal["A", "B"] = "A"
+    title: str = ""
 
     # Operator-provided source (the real Westpoint sheet's "Website Link" + "Details").
     # Both optional: when given, the pipeline uses them as an authoritative source instead

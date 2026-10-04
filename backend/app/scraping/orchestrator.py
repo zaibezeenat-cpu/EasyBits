@@ -813,7 +813,56 @@ async def _platform_fast_json_lookup(
     return None
 
 
+def _extract_search_model_from_title(title: str, brand: str) -> str:
+    brand_tokens = [t.lower() for t in re.split(r"[^a-zA-Z0-9]", brand) if t]
+    title_tokens = [t for t in re.split(r"[^a-zA-Z0-9]", title) if t]
+    
+    start = 0
+    for i, t in enumerate(title_tokens[:len(brand_tokens)]):
+        if t.lower() == brand_tokens[i]:
+            start += 1
+        else:
+            break
+            
+    after_brand = title_tokens[start:]
+    if not after_brand:
+        return ""
+        
+    last_digit_idx = -1
+    for i, t in enumerate(after_brand):
+        if any(c.isdigit() for c in t):
+            last_digit_idx = i
+            
+    if last_digit_idx != -1:
+        return " ".join(after_brand[:last_digit_idx + 2])
+    return " ".join(after_brand[:3])
+
+
 async def scrape_product(
+    brand_name: str, model_number: str, tiers_to_run: tuple | None = None, title_fallback: str = ""
+) -> dict[str, Any]:
+    """
+    Discovers and scrapes sources for one product, with an automatic fallback to
+    useful keywords from the title if the initial exact SKU search yields nothing.
+    """
+    result = await _scrape_product_impl(brand_name, model_number, tiers_to_run)
+    
+    # Fallback to title keywords if original SKU yielded nothing
+    if "failure" in result and title_fallback:
+        fallback_model = _extract_search_model_from_title(title_fallback, brand_name)
+        if fallback_model and fallback_model.lower() != model_number.lower():
+            logger.info(
+                f"Original SKU '{model_number}' failed to yield sources. "
+                f"Falling back to title keywords: '{fallback_model}'"
+            )
+            fallback_result = await _scrape_product_impl(brand_name, fallback_model, tiers_to_run)
+            if "scraped_data" in fallback_result:
+                return fallback_result
+                
+    return result
+
+
+async def _scrape_product_impl(
     brand_name: str, model_number: str, tiers_to_run: tuple | None = None
 ) -> dict[str, Any]:
     """
