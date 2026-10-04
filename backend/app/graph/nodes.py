@@ -264,7 +264,7 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
         # (brand site + trusted retailers); the Google tier has a daily quota and
         # is held back to pass 2 below, so the common case stays free.
         scraped = await scrape_product(
-            raw.brand_name, raw.model_number, tiers_to_run=FREE_TIERS
+            raw.brand_name, raw.model_number, tiers_to_run=FREE_TIERS, title_fallback=raw.title
         )
         if "failure" in scraped and google_search_client.configured:
             logger.info("Free tiers found nothing; falling back to the Google tier.")
@@ -375,7 +375,7 @@ async def extractor_node(state: PipelineState) -> dict[str, Any]:
                 f"widening with the Google tier."
             )
             extra = await scrape_product(
-                state.raw_input.brand_name, state.raw_input.model_number, tiers_to_run=GOOGLE_TIER
+                state.raw_input.brand_name, state.raw_input.model_number, tiers_to_run=GOOGLE_TIER, title_fallback=state.raw_input.title
             )
             if extra.get("scraped_data"):
                 combined = scraped["scraped_data"] + extra["scraped_data"]

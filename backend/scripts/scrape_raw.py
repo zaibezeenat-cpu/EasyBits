@@ -209,7 +209,7 @@ async def _scrape_one(raw: RawProductInput) -> RawRow:
         # nodes.py deliberately holds back for products the free tiers
         # failed on. A diagnostic must not be the thing that burns it.
         scraped = await scrape_product(
-            raw.brand_name, raw.model_number, tiers_to_run=FREE_TIERS
+            raw.brand_name, raw.model_number, tiers_to_run=FREE_TIERS, title_fallback=raw.title
         )
         if "failure" in scraped:
             out.result = scraped["failure"].category

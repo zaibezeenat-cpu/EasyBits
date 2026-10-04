@@ -11,20 +11,21 @@ Tiered page fetch — the single entry point for getting a URL's HTML.
 WHY THE TIER-1 ACCEPTANCE RULE IS NOT JUST "DOES THE PAGE NAME THE MODEL"
 ------------------------------------------------------------------------
 It used to be exactly that, and it was the single biggest cost in the pipeline.
-A shop that simply DOES NOT STOCK the product returns a perfectly good,
-fully-rendered page that just never names the model. The old rule read that as
-"Tier 1 failed" and launched a whole Chromium browser to re-confirm a "not
-found" that curl had already answered correctly.
+A shop whose search simply DOES NOT RETURN the product -- out of stock, never
+carried, listed under a different model number, it does not matter which --
+returns a perfectly good, fully-rendered page that just never names the model.
+The old rule read that as "Tier 1 failed" and launched a whole Chromium browser
+to re-confirm a "not found" that curl had already answered correctly.
 
 With 105+ configured sources and a product carried by only 3-5 of them, roughly
 20 of the 25 permitted scrape attempts per product were exactly this case --
 each paying a full browser launch. Measured: ~150s/product with discovery vs
-~32s/product with discovery disabled, i.e. ~79% of runtime spent proving
-absences the cheap fetch had already proven.
+~32s/product with discovery disabled, i.e. ~79% of runtime spent re-confirming
+misses the cheap fetch had already established.
 
 So a missing model number is now split into two very different situations:
 
-  * the page RENDERED and genuinely lacks the product  -> trust it, no browser
+  * the page RENDERED and does not name the model     -> trust it, no browser
   * the page is an EMPTY JS SHELL that renders later   -> escalate, browser needed
 
 `_tier1_decision` below is that split, and it errs toward escalating: a wrong
@@ -58,8 +59,11 @@ _RENDERED_CONTENT_FLOOR_CHARS = 1500
 
 # Phrases an empty search-results page uses. Only ever consulted once the model
 # number is ALREADY known to be absent from the content, so the page is known not
-# to be our product either way -- these merely upgrade "probably not stocked" to
-# "definitely not stocked", letting us skip the browser even on a short page.
+# to be our product either way -- these merely upgrade "the model is not on this
+# page" to "the site itself says this search returned nothing", letting us skip
+# the browser even on a short page. Neither statement says WHY the search came
+# back empty (out of stock, wrong domain, model number written differently on
+# the site), and nothing downstream should read it that way.
 _NO_RESULTS_MARKERS = (
     "no products found",
     "no products were found",
@@ -93,9 +97,10 @@ def _tier1_decision(result: ScrapeResult | None, model_number: str) -> Tier1Deci
     Decide whether a Tier-1 result can be used as-is, and record why.
 
     The interesting branch is the last one: the model number is absent. That is
-    either a real "this shop does not stock it" (usable -- the answer is correct
-    and cost nothing) or an unrendered JS shell (not usable -- the browser has to
-    run before we can conclude anything).
+    either a real "this page rendered and does not list the model" (usable --
+    the answer is correct and cost nothing; why the model is missing is a
+    separate question this decision does not answer) or an unrendered JS shell
+    (not usable -- the browser has to run before we can conclude anything).
 
     Product links are the discriminator. A server-rendered storefront page --
     including an empty search-results page, which still renders its "you might
@@ -121,8 +126,10 @@ def _tier1_decision(result: ScrapeResult | None, model_number: str) -> Tier1Deci
 
     # --- The model is absent. Rendered-but-absent, or not yet rendered? ---
 
-    # An explicit "no results" message is proof the site's search RAN and found
-    # nothing. Conclusive on its own, regardless of page size.
+    # An explicit "no results" message is proof the site's search RAN and
+    # returned nothing for this query -- which settles the only question asked
+    # here (did the page render?), regardless of page size. It says nothing
+    # about whether the site carries the product.
     if _has_no_results_marker(result.content):
         return Tier1Decision(True, "explicit_no_results")
 
